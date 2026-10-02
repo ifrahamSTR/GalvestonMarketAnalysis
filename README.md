@@ -5,7 +5,7 @@ Static site (no build step), same template as the Park City and Charlotte market
 ## Pipeline
 
 1. `../notebooks/market_common.py` holds the market specifics:
-   - workbook `../Galveston - TX.xlsx` → `Cleaned_Data`;
+   - workbook `../Galveston - TX (2).xlsx` (snapshot 2026-10-02) → `Cleaned_Data`, kept to entire homes via `Base_Table.roomType` (923 of 942; 18 private rooms and 1 hotel room dropped);
    - the 7 Ward-clustered reference areas, named from centroids;
    - the bedroom-size buckets;
    - the main location variable: beach position (Gulf-front / beach walk / bay or canal / inland, from an OpenStreetMap Gulf shoreline) and town vs. West End.

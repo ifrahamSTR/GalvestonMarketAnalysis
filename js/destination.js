@@ -22,13 +22,15 @@ function renderDestinationSection() {
     '<div id="dest-panel" class="dest-panel" aria-live="polite"></div></div></div>';
 
   const map = L.map("dest-map", { scrollWheelZoom: false, zoomSnap: 0.25 });
+  const narrow = host.clientWidth < 560;
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 17, attribution: "&copy; OpenStreetMap contributors" }).addTo(map);
   const layers = {};
   areas.forEach((a) => {
     const color = DEST_KIND[a.kind][1];
     layers[a.id] = a.zones.map((z) => {
       const c = L.circle([z.lat, z.lng], { radius: z.r, color: color, weight: 2, fillColor: color, fillOpacity: 0.12 }).addTo(map).on("click", () => select(a.id, true));
-      if (z.tip) c.bindTooltip(z.tip, { permanent: true, direction: z.dir || "top", className: "dest-tip", offset: z.off || [0, 0] });
+      const tip = narrow && z.tipShort ? z.tipShort : z.tip;
+      if (tip) c.bindTooltip(tip, { permanent: true, direction: z.dir || "top", className: "dest-tip", offset: z.off || [0, 0] });
       return c;
     });
   });
@@ -59,7 +61,7 @@ function renderDestinationSection() {
   const S = DEST_SEASON;
   document.getElementById("dest-season").innerHTML =
     '<div class="dest-strip">' + months.map((m, i) => '<div class="dest-strip__m dest-strip__m--' + S.months[i] + '">' + (S.marks && S.marks[i] ? "<small>" + S.marks[i] + "</small>" : "") + "<span>" + m + "</span></div>").join("") + "</div>" +
-    '<div class="dest-strip__legend">' + S.legend.map((l) => '<span class="dest-key dest-key--' + l[0] + '"></span>' + l[1]).join(" ") + "</div>" +
+    '<div class="dest-strip__legend">' + S.legend.map((l) => '<span class="dest-key-item"><span class="dest-key dest-key--' + l[0] + '"></span>' + l[1] + "</span>").join("") + "</div>" +
     '<p class="caption">' + S.caption + "</p>";
 
   const bridge = document.getElementById("dest-bridge");

@@ -66,7 +66,7 @@ payload = {
     "MARKET_STATS": {
         "market": s["market"], "snapshot": s["snapshot"], "n": s["n"], "median": r0(s["median"]), "p75": r0(s["p75"]),
         "p90": r0(s["p90"]), "max": r0(s["max"]), "medianAdr": r0(s["median_adr"]), "medianOcc": round(s["median_occ"] * 100),
-        "medianRating": s["median_rating"], "bedroomMix": s["bedroom_mix"],
+        "medianRating": s["median_rating"], "bedroomMix": s["bedroom_mix"], "otherRooms": s.get("other_rooms", 0),
     },
     "DEMOGRAPHICS": {
         "marketWide": {"n": s["n"], "kids": s["demographics_market"]["pct_stayed_with_kids"],
@@ -76,6 +76,12 @@ payload = {
         "byBedroom": demo(s["demographics_by_bedroom"]),
         "byLoc": demo(s["demographics_by_loc"]),
         "byArea": demo(s["demographics_by_area"]),
+        "byZoneSize": {z: {sz: {"n": v["n"], "kids": v.get("pct_stayed_with_kids"), "group": v.get("pct_group_trip"),
+                                "pet": v.get("pct_stayed_with_a_pet"), "other": v.get("pct_other_reviews")} for sz, v in d.items()}
+                       for z, d in s.get("demographics_by_zone_size", {}).items()},
+        "byAreaSize": {a: {sz: {"n": v["n"], "kids": v.get("pct_stayed_with_kids"), "group": v.get("pct_group_trip"),
+                                "pet": v.get("pct_stayed_with_a_pet"), "other": v.get("pct_other_reviews")} for sz, v in d.items()}
+                       for a, d in s.get("demographics_by_area_size", {}).items()},
     },
     "LOCATION": {
         "sizes": s["size_order"], "locs": s["loc_order"], "locName": s["loc_name"], "locDef": s["loc_def"],
@@ -93,6 +99,9 @@ payload = {
         "amenBySize": {a: {sz: {"nWith": v["with_n"], "idxWith": r2(v["idx_with"]), "idxWithout": r2(v["idx_without"])}
                            for sz, v in d.items()} for a, d in s["amen_by_size"].items()},
         "bestBySize": s["best_by_size"],
+        "zones": s.get("zone_order", []),
+        "zoneLocSize": {z: {sz: {l: cell(c) for l, c in row.items()} for sz, row in d.items()} for z, d in s.get("zone_loc_size", {}).items()},
+        "zoneSize": {z: {sz: cell(c) for sz, c in d.items()} for z, d in s.get("zone_size", {}).items()},
     },
 }
 

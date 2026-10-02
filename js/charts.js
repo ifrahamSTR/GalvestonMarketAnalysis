@@ -11,37 +11,42 @@ const LOC_PALETTE = ["#075646", "#5f9e8f", "#d99132", "#a8b2bd"];
 Chart.defaults.font.family = "'Inter', 'Segoe UI', system-ui, sans-serif";
 Chart.defaults.font.size = 13;
 Chart.defaults.color = "#485a55";
+// Long Chart.js titles get squeezed sideways on phones; split them instead.
+const NARROW_CHARTS = typeof window !== "undefined" && window.innerWidth < 600;
+function chartTitle(text, splitAt) {
+  if (!NARROW_CHARTS) return text;
+  const i = splitAt ? text.indexOf(splitAt) : text.lastIndexOf(" (");
+  return i > 0 ? [text.slice(0, i).trim(), text.slice(i).replace(/^,\s*/, "").trim()] : text;
+}
 
 function renderRevenueDistributionChart() {
   const ctx = document.getElementById("chart-revenue-distribution");
   if (!ctx) return;
   const dist = REVENUE_DISTRIBUTION;
-  const colors = dist.histogram.map((b) => {
-    const mid = (b.binStart + b.binEnd) / 2;
-    return mid >= dist.p90 ? CHART_PALETTE.top10 : mid >= dist.p75 ? CHART_PALETTE.top25 : CHART_PALETTE.bottom75;
-  });
+  const label = (b) => (b.overflow ? "$" + Math.round(b.binStart / 1000) + "k+" : "$" + Math.round(b.binStart / 1000) + "k");
+  // Bars are stacked by market tier (counts from the notebook), so a bin that
+  // straddles the P75 or P90 threshold is split rather than mis-coloured.
+  const series = [["bottom75", "Bottom 75%", CHART_PALETTE.bottom75], ["top25", "Top 25%", CHART_PALETTE.top25], ["top10", "Top 10%", CHART_PALETTE.top10]];
   new Chart(ctx, {
     type: "bar",
     data: {
-      labels: dist.histogram.map((b) => "$" + Math.round(b.binStart / 1000) + "k"),
-      datasets: [{ label: "Listings by Revenue Potential", data: dist.histogram.map((b) => b.count), backgroundColor: colors, borderWidth: 0 }],
+      labels: dist.histogram.map(label),
+      datasets: series.map(([k, name, color]) => ({ label: name, data: dist.histogram.map((b) => b[k]), backgroundColor: color, borderWidth: 0 })),
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
-        title: { display: true, text: "Market-wide Revenue Potential distribution (n=" + dist.totalCount + ")", font: { size: 14, weight: "600" } },
+        title: { display: true, text: chartTitle("Market-wide Revenue Potential distribution (" + dist.totalCount + " listings)"), font: { size: 14, weight: "600" } },
         legend: { display: false },
         tooltip: {
           callbacks: {
-            label: (c) => {
-              const bin = dist.histogram[c.dataIndex];
-              return c.parsed.y + " listings ($" + Math.round(bin.binStart / 1000) + "k–$" + Math.round(bin.binEnd / 1000) + "k)";
-            },
+            title: (items) => { const b = dist.histogram[items[0].dataIndex]; return b.overflow ? "$" + Math.round(b.binStart / 1000) + "k and up" : "$" + Math.round(b.binStart / 1000) + "k–$" + Math.round(b.binEnd / 1000) + "k"; },
+            label: (c) => (c.parsed.y ? c.dataset.label + ": " + c.parsed.y + " listings" : null),
           },
         },
       },
-      scales: { x: { ticks: { maxRotation: 60, minRotation: 45 } }, y: { title: { display: true, text: "Listings" } } },
+      scales: { x: { stacked: true, ticks: { maxRotation: 60, minRotation: 45 } }, y: { stacked: true, title: { display: true, text: "Listings" } } },
     },
   });
   const legend = document.getElementById("chart-revenue-distribution-legend");
@@ -69,7 +74,9 @@ function renderLocSizeChart() {
         data: L.sizes.map((s) => { const c = L.locSize[s][l]; return c && c.n >= HIDE_N ? c.median : null; }),
         counts: L.sizes.map((s) => (L.locSize[s][l] || {}).n || 0),
         idx: L.sizes.map((s) => (L.locSize[s][l] || {}).idx),
-        backgroundColor: LOC_PALETTE[i % LOC_PALETTE.length],
+        // Bars resting on fewer than THIN_N homes are faded, matching the table.
+        backgroundColor: L.sizes.map((s) => { const c = L.locSize[s][l]; return c && c.n >= HIDE_N && c.n < THIN_N ? LOC_PALETTE[i % LOC_PALETTE.length] + "55" : LOC_PALETTE[i % LOC_PALETTE.length]; }),
+        legendColor: LOC_PALETTE[i % LOC_PALETTE.length],
         borderWidth: 0,
         borderRadius: 3,
       })),
@@ -78,11 +85,18 @@ function renderLocSizeChart() {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
-        title: { display: true, text: "Median revenue by " + L.locName.charAt(0).toLowerCase() + L.locName.slice(1) + ", within each bedroom size", font: { size: 14, weight: "600" } },
-        legend: { position: "bottom" },
+        title: { display: true, text: chartTitle("Median revenue by " + L.locName.charAt(0).toLowerCase() + L.locName.slice(1) + ", within each bedroom size", ", within"), font: { size: 14, weight: "600" } },
+        legend: {
+          position: "bottom",
+          labels: {
+            generateLabels: (chart) => Chart.defaults.plugins.legend.labels.generateLabels(chart).map((it) => {
+              const col = chart.data.datasets[it.datasetIndex].legendColor; return Object.assign(it, { fillStyle: col, strokeStyle: col });
+            }),
+          },
+        },
         tooltip: {
           callbacks: {
-            label: (c) => c.dataset.label + ": " + fmtK(c.parsed.y) + " (" + fmtX(c.dataset.idx[c.dataIndex]) + " typical, " + c.dataset.counts[c.dataIndex] + " homes)",
+            label: (c) => { const n = c.dataset.counts[c.dataIndex]; return c.dataset.label + ": " + fmtK(c.parsed.y) + " (" + fmtX(c.dataset.idx[c.dataIndex]) + " typical, " + n + " homes" + (n < THIN_N ? " – few homes" : "") + ")"; },
           },
         },
       },
@@ -105,7 +119,7 @@ function renderDemographicsPieChart() {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
-        title: { display: true, text: "Average review composition — all listings (n=" + m.n + ")", font: { size: 14, weight: "600" } },
+        title: { display: true, text: chartTitle("Average review composition — all listings (" + m.n + " listings)", " — "), font: { size: 14, weight: "600" } },
         legend: { position: "bottom" },
         tooltip: { callbacks: { label: (c) => c.label + ": " + c.parsed + "%" } },
       },
@@ -120,7 +134,7 @@ function renderDemographicsStackedBarChart() {
   new Chart(ctx, {
     type: "bar",
     data: {
-      labels: rows.map((r) => sizeLabel(r.label) + " (n=" + r.n + ")"),
+      labels: rows.map((r) => (NARROW_CHARTS ? sizeLabel(r.label).replace("–", "–\n").split("\n") : [sizeLabel(r.label), r.n + " listings"])),
       datasets: [
         { label: "Stayed with kids", data: rows.map((r) => r.kids), backgroundColor: DEMOGRAPHICS_PALETTE.kids },
         { label: "Group trip", data: rows.map((r) => r.group), backgroundColor: DEMOGRAPHICS_PALETTE.group },
@@ -132,11 +146,11 @@ function renderDemographicsStackedBarChart() {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
-        title: { display: true, text: "Guest composition by bedroom count", font: { size: 14, weight: "600" } },
+        title: { display: true, text: "Guest composition by bedroom size", font: { size: 14, weight: "600" } },
         legend: { position: "bottom" },
-        tooltip: { callbacks: { label: (c) => c.dataset.label + ": " + c.parsed.y + "%" } },
+        tooltip: { callbacks: { title: (items) => { const r = rows[items[0].dataIndex]; return sizeLabel(r.label) + " (" + r.n + " listings)"; }, label: (c) => c.dataset.label + ": " + c.parsed.y + "%" } },
       },
-      scales: { x: { stacked: true }, y: { stacked: true, title: { display: true, text: "% of reviews" }, max: 100 } },
+      scales: { x: { stacked: true, ticks: { maxRotation: 0, autoSkip: false, font: { size: NARROW_CHARTS ? 10 : 12 } } }, y: { stacked: true, title: { display: true, text: "% of reviews" }, max: 100 } },
     },
   });
 }
