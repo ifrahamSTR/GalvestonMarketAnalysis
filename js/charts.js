@@ -78,7 +78,7 @@ function renderLocSizeChart() {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
-        title: { display: true, text: "Median revenue by " + L.locName.toLowerCase() + ", within each bedroom size", font: { size: 14, weight: "600" } },
+        title: { display: true, text: "Median revenue by " + L.locName.charAt(0).toLowerCase() + L.locName.slice(1) + ", within each bedroom size", font: { size: 14, weight: "600" } },
         legend: { position: "bottom" },
         tooltip: {
           callbacks: {

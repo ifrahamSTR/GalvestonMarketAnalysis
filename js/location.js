@@ -23,9 +23,10 @@ function idxClass(idx, n) {
   return "";
 }
 function locCell(c) {
-  if (!c || c.n < HIDE_N) return '<td class="loc-cell is-empty"><span class="loc-cell__big">—</span><span class="loc-cell__sub">' + (c ? c.n : 0) + " homes</span></td>";
+  const homes = (n) => n + (n === 1 ? " home" : " homes");
+  if (!c || c.n < HIDE_N) return '<td class="loc-cell is-empty"><span class="loc-cell__big">—</span><span class="loc-cell__sub">' + homes(c ? c.n : 0) + "</span></td>";
   return '<td class="loc-cell ' + idxClass(c.idx, c.n) + '"><span class="loc-cell__big">' + fmtK(c.median) + '</span><span class="loc-cell__sub">' +
-    fmtX(c.idx) + " · " + c.n + " homes" + (c.n < THIN_N ? fewTag() : "") + "</span></td>";
+    fmtX(c.idx) + " · " + homes(c.n) + (c.n < THIN_N ? fewTag() : "") + "</span></td>";
 }
 
 // ---------------------------------------------------------------------------
