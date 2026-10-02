@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Galveston, TX STR Market Analysis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="css/styles.css?v=20261002-m1" />
+</head>
+<body>
+
+<header class="site-header">
+  <div class="site-header__inner">
+    <div class="site-header__brand">
+      <img class="site-header__logo" src="assets/branding/strsearch-logo.webp" alt="STR Search" />
+      <div class="site-header__title">Galveston, TX <span>STR Market &amp; Location Analysis</span></div>
+    </div>
+    <nav class="site-nav">
+      <a href="#market">Market</a>
+      <a href="#location">Location</a>
+      <a href="#destinations">Why Here</a>
+      <a href="#demographics">Demographics</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+  <!-- Overview: the one-line read. No buy boxes on this page (yet). -->
+  <section id="overview" class="section section--hero">
+    <div class="container">
+      <p class="section-kicker">Market &amp; Location Analysis</p>
+      <h1 id="hero-title"></h1>
+      <p id="hero-sub" class="hero-sub"></p>
+    </div>
+  </section>
+
+  <!-- Section 2: Market context + revenue by bedroom size -->
+  <section id="market" class="section">
+    <div class="container">
+      <p class="section-kicker">Section 2</p>
+      <h2>The Market</h2>
+      <div id="market-overview-body" class="market-overview"></div>
+
+      <div class="chart-card chart-card--wide chart-card--spaced">
+        <canvas id="chart-revenue-distribution"></canvas>
+      </div>
+      <div id="chart-revenue-distribution-legend" class="chart-legend-row"></div>
+      <p id="chart-revenue-distribution-interpretation" class="caption"></p>
+
+      <h3 class="subsection-title">Revenue by Bedroom Size</h3>
+      <div id="size-ladder"></div>
+      <p id="size-ladder-note" class="caption"></p>
+
+      <h3 class="subsection-title">What Separates the Top Performers <span class="title-note">compared within the same size</span></h3>
+      <div id="drivers-table"></div>
+      <p class="caption" id="drivers-note"></p>
+    </div>
+  </section>
+
+  <!-- Section 3: Location analysis, organised by bedroom size (js/location.js) -->
+  <section id="location" class="section">
+    <div class="container">
+      <p class="section-kicker">Section 3</p>
+      <h2>Location Analysis by Bedroom Size</h2>
+      <p id="location-lede" class="subsection-lede"></p>
+      <iframe class="embedded-map embedded-map--tall" src="assets/overview/galveston_overview_map.html?v=20261002-m1" loading="lazy" title="Interactive map of Galveston STR listings by bedroom size, performance against same-size homes, seven reference areas and demand landmarks"></iframe>
+      <p id="map-interpretation" class="caption"></p>
+
+      <h3 class="subsection-title">What Location Adds at Each Size</h3>
+      <div class="chart-card chart-card--wide">
+        <canvas id="chart-loc-size"></canvas>
+      </div>
+      <div id="loc-size-table"></div>
+      <p class="loc-key"><span style="--k:color-mix(in srgb,#075646 16%,white)">1.20× typical or more</span><span style="--k:color-mix(in srgb,#075646 7%,white)">1.07–1.19×</span><span style="--k:#fff">about typical</span><span style="--k:#fbe4e2">0.85× or less</span><span style="--k:#f6f7f7">grey text = fewer than 8 homes</span></p>
+
+      <h3 class="subsection-title">Where Each Size Earns, by Area</h3>
+      <div id="area-grid"></div>
+      <p id="area-grid-note" class="caption"></p>
+
+      <div class="conclusion-box">
+        <h3>Where to look, by size</h3>
+        <div id="size-guide"></div>
+      </div>
+
+      <details class="ref-details">
+        <summary>Reference-area numbers (the same figures appear when you click an area on the map)</summary>
+        <div id="area-table"></div>
+      </details>
+    </div>
+  </section>
+
+  <!-- Section 4: why location changes the rate (destination context). Content: js/destination.js -->
+  <section id="destinations" class="section">
+    <div class="container">
+      <p class="section-kicker">Section 4</p>
+      <h2>Why Location Changes the Rate</h2>
+      <p id="dest-lede" class="subsection-lede"></p>
+      <div id="destination-body"></div>
+      <h3 class="subsection-title">When Guests Come</h3>
+      <div id="dest-season"></div>
+      <div id="dest-bridge" class="conclusion-box dest-bridge"></div>
+      <p id="dest-sources" class="dest-sources"></p>
+    </div>
+  </section>
+
+  <!-- Section 5: Traveller demographics -->
+  <section id="demographics" class="section">
+    <div class="container">
+      <p class="section-kicker">Section 5</p>
+      <h2>Traveller Demographics</h2>
+      <div id="demographics-intro-body"></div>
+      <div class="chart-row">
+        <div>
+          <div class="chart-card">
+            <canvas id="chart-demographics-pie"></canvas>
+          </div>
+        </div>
+        <div>
+          <div class="chart-card">
+            <canvas id="chart-demographics-bedroom"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="container">
+    <p id="footer-note"></p>
+  </div>
+</footer>
+
+<div id="lightbox" class="lightbox" aria-hidden="true" role="dialog" aria-modal="true" aria-label="Expanded image">
+  <button type="button" class="lightbox__close" aria-label="Close image" onclick="closeLightbox()">&times;</button>
+  <figure class="lightbox__figure">
+    <img id="lightbox-image" src="" alt="" />
+    <figcaption id="lightbox-caption"></figcaption>
+  </figure>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="js/region_data.js?v=20261002-m1"></script>
+<script src="js/render.js?v=20261002-m1"></script>
+<script src="js/location.js?v=20261002-m1"></script>
+<script src="js/data.js?v=20261002-m1"></script>
+<script src="js/destination.js?v=20261002-m1"></script>
+<script src="js/charts.js?v=20261002-m1"></script>
+<script src="js/main.js?v=20261002-m1"></script>
+</body>
+</html>
