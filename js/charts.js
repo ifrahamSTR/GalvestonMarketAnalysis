@@ -16,7 +16,7 @@ const NARROW_CHARTS = typeof window !== "undefined" && window.innerWidth < 600;
 function chartTitle(text, splitAt) {
   if (!NARROW_CHARTS) return text;
   const i = splitAt ? text.indexOf(splitAt) : text.lastIndexOf(" (");
-  return i > 0 ? [text.slice(0, i).trim(), text.slice(i).replace(/^,\s*/, "").trim()] : text;
+  return i > 0 ? [text.slice(0, i).trim(), text.slice(i).replace(/^[,—–]\s*/, "").trim()] : text;
 }
 
 function renderRevenueDistributionChart() {
@@ -86,6 +86,9 @@ function renderLocSizeChart() {
         idx: L.sizes.map((s) => (L.locSize[s][l] || {}).idx),
         // Bars resting on fewer than THIN_N homes are faded, matching the table.
         backgroundColor: L.sizes.map((s) => { const c = L.locSize[s][l]; return c && c.n >= HIDE_N && c.n < THIN_N ? LOC_PALETTE[i % LOC_PALETTE.length] + "55" : LOC_PALETTE[i % LOC_PALETTE.length]; }),
+        // A solid outline keeps a faded bar's hue readable.
+        borderColor: LOC_PALETTE[i % LOC_PALETTE.length],
+        borderWidth: L.sizes.map((s) => { const c = L.locSize[s][l]; return c && c.n >= HIDE_N && c.n < THIN_N ? 1.5 : 0; }),
         legendColor: LOC_PALETTE[i % LOC_PALETTE.length],
         borderWidth: 0,
         borderRadius: 3,
@@ -100,7 +103,9 @@ function renderLocSizeChart() {
           position: "bottom",
           labels: {
             generateLabels: (chart) => Chart.defaults.plugins.legend.labels.generateLabels(chart).map((it) => {
-              const col = chart.data.datasets[it.datasetIndex].legendColor; return Object.assign(it, { fillStyle: col, strokeStyle: col });
+              const ds = chart.data.datasets[it.datasetIndex], col = ds.legendColor;
+              const allThin = ds.counts.every((n) => n < THIN_N);  // e.g. every Gulf-front bar in a small market
+              return Object.assign(it, { fillStyle: allThin ? col + "55" : col, strokeStyle: col, lineWidth: allThin ? 1.5 : 0 });
             }),
           },
         },
