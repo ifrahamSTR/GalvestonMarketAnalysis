@@ -57,7 +57,7 @@ function openLightbox(src, alt, caption) {
   const lightbox = document.getElementById("lightbox");
   document.getElementById("lightbox-image").src = src;
   document.getElementById("lightbox-image").alt = alt || "";
-  document.getElementById("lightbox-caption").textContent = caption || "";
+  document.getElementById("lightbox-caption").innerHTML = caption || "";  // captions are author-written (credit links)
   lightbox.classList.add("lightbox--open");
   lightbox.setAttribute("aria-hidden", "false");
 }

@@ -46,7 +46,17 @@ function renderRevenueDistributionChart() {
           },
         },
       },
-      scales: { x: { stacked: true, ticks: { maxRotation: 60, minRotation: 45 } }, y: { stacked: true, title: { display: true, text: "Listings" } } },
+      scales: {
+        x: {
+          stacked: true,
+          ticks: {
+            maxRotation: 60, minRotation: 45, autoSkip: false,
+            // Always show the last ("$Xk+") label; thin the others on phones.
+            callback: function (v, i, t) { const last = t.length - 1; if (i === last) return this.getLabelForValue(v); if (NARROW_CHARTS && (i % 3 !== 0 || i >= last - 1)) return ""; return this.getLabelForValue(v); },
+          },
+        },
+        y: { stacked: true, title: { display: true, text: "Listings" } },
+      },
     },
   });
   const legend = document.getElementById("chart-revenue-distribution-legend");

@@ -89,7 +89,7 @@ const MAP_CONFIG = {
   lede:
     "Bedroom count sets the baseline; location decides whether a home beats it. Every comparison here is within the same size: <strong>1.00× = what a typical Galveston home that size earns</strong>. Two things carry the location effect: <strong>where the house sits against the water</strong> (first row on the Gulf, a short walk, on the bay or a canal, or inland), and <strong>town versus West End</strong> (the Seawall ends near 103rd Street). “First row” means within about 200 m of the beach; in town that mostly means the first block or two behind Seawall Boulevard. The two work together: for 3BRs the first-row premium is a West End effect, and almost all first-row 4BR and larger homes are on the West End, so town has too few to compare.",
   marketInterpretation:
-    "In the bottom-left panel (tap “show” on a phone), <strong>untick all but one bedroom size</strong> to see where that size earns. Green = top quarter for its size, amber = middle half, grey = bottom quarter; bigger dots = more bedrooms. Click an area outline for its numbers by size. The seven areas are clusters of listing coordinates, used as reference geography only.",
+    "In the bottom-left panel (tap “show” on a phone), <strong>untick all but one bedroom size</strong> to see where that size earns. Green = top quarter for its size, gold = middle half, grey = bottom quarter; bigger dots = more bedrooms. Click an area outline for its numbers by size. The seven areas are clusters of listing coordinates, used as reference geography only.",
 };
 
 const LOC_READS = {
@@ -164,7 +164,7 @@ const MARKET_OVERVIEW = {
   heroImage: photo(
     "overview/galveston-seawall-pleasure-pier.jpg",
     "The Galveston Seawall walkway and benches with the beach and the Pleasure Pier behind",
-    "The Seawall and the Pleasure Pier, Galveston. Photo: Patrick Feller, Wikimedia Commons (CC BY 2.0)."
+    'The Seawall and the Pleasure Pier, Galveston. Photo: Patrick Feller, <a href="https://commons.wikimedia.org/wiki/File:Seawall_Benches_and_Pleasure_Pier,_Galveston,_Texas_1301071119.jpg" target="_blank" rel="noopener">Wikimedia Commons</a>, <a href="https://creativecommons.org/licenses/by/2.0/" target="_blank" rel="noopener">CC BY 2.0</a>.'
   ),
   chips: [
     { label: "9.1M Visitors · $1.3B Spent (2025)" },

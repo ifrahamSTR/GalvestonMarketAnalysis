@@ -26,7 +26,7 @@ function locCell(c) {
   const homes = (n) => '<span class="nowrap">' + n + (n === 1 ? " home" : " homes") + "</span>";
   if (!c || c.n < HIDE_N) return '<td class="loc-cell is-empty"><span class="loc-cell__big">—</span><span class="loc-cell__sub">' + homes(c ? c.n : 0) + "</span></td>";
   return '<td class="loc-cell ' + idxClass(c.idx, c.n) + '"><span class="loc-cell__big">' + fmtK(c.median) + '</span><span class="loc-cell__sub">' +
-    fmtX(c.idx) + " · " + homes(c.n) + (c.n < THIN_N ? fewTag() : "") + "</span></td>";
+    '<span class="nowrap">' + fmtX(c.idx) + " · " + homes(c.n) + "</span>" + (c.n < THIN_N ? fewTag() : "") + "</span></td>";
 }
 
 // ---------------------------------------------------------------------------

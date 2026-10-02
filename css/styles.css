@@ -839,3 +839,11 @@ img { max-width: 100%; display: block; }
 .zone-table tr.zone-first th, .zone-table tr.zone-first td { border-top: 2px solid var(--color-border); }
 .loc-fade-note { margin: 6px 0 0; font-size: 0.8rem; color: var(--color-text-muted); }
 @media (max-width: 600px) { .chart-row .chart-card { height: 380px; } }
+
+/* Third verification pass (2026-10-03): section anchors clear the sticky
+   header; on phones the header scrolls away instead of covering 16% of the
+   screen; no hairline seams between Leaflet tiles at fractional zoom. */
+.section[id] { scroll-margin-top: 80px; }
+@media (max-width: 600px) { .site-header { position: static; } .section[id] { scroll-margin-top: 8px; } }
+.dest-map .leaflet-tile { mix-blend-mode: plus-lighter; }
+.photo-figure figcaption a { color: inherit; }
