@@ -98,6 +98,7 @@ payload = {
                      "idxWith": r2(d["idx_with"]), "idxWithout": r2(d["idx_without"])} for d in s["drivers"]],
         "amenBySize": {a: {sz: {"nWith": v["with_n"], "idxWith": r2(v["idx_with"]), "idxWithout": r2(v["idx_without"])}
                            for sz, v in d.items()} for a, d in s["amen_by_size"].items()},
+        "top10Amen": s.get("top10_amen", {}),
         "bestBySize": s["best_by_size"],
         "zones": s.get("zone_order", []),
         "zoneLocSize": {z: {sz: {l: cell(c) for l, c in row.items()} for sz, row in d.items()} for z, d in s.get("zone_loc_size", {}).items()},
