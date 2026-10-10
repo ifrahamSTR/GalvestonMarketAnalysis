@@ -8,7 +8,12 @@
 //    and copy from the map list, a popup and a card give identical lines for one listing
 //  - the comp picker never offers a listing outside Cleaned_Data
 //  - a Zillow URL in a comp table is flagged; error badges; remove flagged comps; copy warnings
-//  - scenarios: labels, default, side-by-side table, "start from" / "find no-pool comps"
+//  - scenarios: labels, default, side-by-side table with comp errors, "start from" / "find no-pool comps"
+//  - target profile: prefill sources, 1/0 toggles marked "manual", matching reruns, "Reset to sheet"
+//  - two matching modes, each with its own filters: location (same zone and water, beds +/-1,
+//    distance order) and amenities (the whole island ranked best to worst, nothing excluded);
+//    the target popup's buttons; add from both modes = one row tagged Both; the Match column
+//    filter; "Append distance to notes"
 //  - no console errors
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
@@ -64,6 +69,7 @@ await page.goto(BASE + "underwritten.html", { waitUntil: "networkidle" });
 await ev(() => { localStorage.clear(); sessionStorage.clear(); });
 await page.reload({ waitUntil: "networkidle" });
 await page.waitForTimeout(600);
+if (errors.length) console.log("LOAD ERRORS: " + errors.join(" | "));
 
 // ---------------------------------------------------------------------------
 console.log("1. Comp tables mirror the sheet (all " + UWJ.properties.reduce((s, p) => s + p.versions.length, 0) + " scenarios)");
@@ -105,7 +111,13 @@ await page.waitForTimeout(700);
 const shownIds = await ev(() => [...document.querySelectorAll("#uw-p-comps [data-pick]")].map((i) => i.dataset.pick));
 const allowed = new Set(COMPS.listings.map((l) => l.id));
 check(shownIds.length > 0 && shownIds.every((id) => allowed.has(id)), "the nearest list offers only Cleaned_Data entire homes (" + shownIds.length + " shown)");
-check((await ev(() => [...document.querySelectorAll(".uw-fchip")].length)) >= 3, "selecting a target applies Match this property, shown as removable chips");
+const locRes = await ev((pid) => {
+  const p = UW.property(pid), water = UWRules.WATER_LOC[p.waterfront] || [], beds = UW.activeVersion(p).profile.beds;
+  const r = UW.mapApi.lastNearest;
+  return { mode: UW.ui.mode, n: r.length, zone: p.place.zone, water: p.waterfront, beds,
+    ok: r.every((x, i) => (p.place.zone === "Town") === !!x.l.town && water.includes(x.l.loc) && Math.abs(x.l.bedrooms - beds) <= 1 && x.l.revenue >= 90000 && (!i || x.d >= r[i - 1].d)) };
+}, OP);
+check(locRes.mode === "location" && locRes.n > 0 && locRes.ok, "selecting a target opens Match by location: " + locRes.n + " homes, all " + locRes.zone + " / " + locRes.water + ", " + locRes.beds + " beds ±1, $90k+, nearest first");
 await page.click('#uw-p-comps [data-act="pickall"]');
 await page.waitForTimeout(200);
 await page.click('#uw-p-comps [data-act="copypicked"]');
@@ -203,6 +215,8 @@ const sel = await ev((pid) => { const s = document.querySelector("#uw-card-" + p
 check(sel[0] === "*With pool · file 96" && sel[1] === "Without pool · file 97", "the scenario select reads " + JSON.stringify(sel) + " and opens on With pool (no “latest”)");
 const scenCols = await ev((pid) => [...document.querySelectorAll("#uw-card-" + pid + " .uw-scen__t thead th")].map((th) => th.childNodes[0].textContent), OP);
 check(scenCols.join("|") === "Scenario|With pool|Without pool", "the card shows the scenarios side by side");
+const errRow = await ev((pid) => { const r = [...document.querySelectorAll("#uw-card-" + pid + " .uw-scen__t tbody tr")].find((tr) => /Comp errors/.test(tr.querySelector("th").textContent)); return r && [...r.querySelectorAll("td")].map((td) => td.textContent.trim()); }, OP);
+check(!!errRow && errRow.length === 2, "the side-by-side table has a Comp errors row: " + JSON.stringify(errRow));
 await ev((pid) => UW.mapApi.openTarget(pid), OP);
 await page.waitForTimeout(500);
 const pop = await ev(() => { const t = document.querySelector(".uw-tpop"); return t && { zl: !!t.querySelector(".uw-tpop__zl[href*='zillow.com']"), scen: t.querySelectorAll('[data-act="tp-ver"]').length, table: !!t.querySelector(".uw-scen__t"), err: (t.querySelector(".uw-badge--err") || {}).textContent }; });
@@ -215,14 +229,88 @@ const emptyBtns = await ev((pid) => [...document.querySelectorAll("#uw-card-" + 
 check(emptyBtns.join("|") === "Start from the With pool comp set|Find no-pool comps", "file 97 (no comps) offers: " + emptyBtns.join(" / "));
 await page.click("#uw-card-" + OP + ' [data-act="find-nopool"]');
 await page.waitForTimeout(600);
-const np = await ev(() => ({ pool: UW.ui.filters.am.pool, rows: UW.mapApi.lastNearest.map((x) => x.l.flagSet.has("pool")) }));
-check(np.pool === -1 && np.rows.length > 0 && np.rows.every((h) => !h), "“Find no-pool comps” applies Match this property with pool = Exclude (" + np.rows.length + " nearest, none with a pool)");
+const np = await ev(() => ({ mode: UW.ui.mode, pool: UW.ui.amRules.pool, island: UW.matchSet.size, rows: UW.mapApi.lastNearest.map((x) => x.l.flagSet.has("pool")) }));
+check(np.mode === "amenity" && np.pool === 0 && np.island === COMPS.listings.length && np.rows.length > 0 && !np.rows[0],
+  "“Find no-pool comps” opens Match by amenities with pool = 0: the whole island (" + np.island + ") ranked, no-pool homes first (" + np.rows.filter((h) => !h).length + " of the best " + np.rows.length + " have no pool)");
 await page.click("#uw-card-" + OP + ' [data-act="start-from"]');
 await page.waitForTimeout(300);
 const n97 = await ev((pid) => UW.property(pid).versions.find((v) => v.label === "97").comps.length, OP);
 check(n97 === UWJ.properties.find((p) => p.id === OP).versions.find((v) => v.label === "96").comps.length, "“Start from the With pool comp set” copies its " + n97 + " rows into file 97");
 
-console.log("5. Console");
+// ---------------------------------------------------------------------------
+console.log("5. Target profile and the two matching modes");
+const GC = "27662294";
+await ev((pid) => { UW.ui.expanded.add(pid); UW.select(pid, { from: "panel" }); UW.cardsApi.renderCard(pid); UW.panelApi.showTab("comps"); }, GC);
+await page.waitForTimeout(500);
+const prof = await ev((pid) => { const box = document.getElementById("uw-profile-" + pid); const pr = UW.activeVersion(UW.property(pid)).profile; return { box: !!box, pool: pr.flags.pool, src: pr.src.flags.pool, hot: pr.src.flags.hot_tub, text: box && box.textContent }; }, GC);
+check(prof.box && prof.pool === 1 && /^notes:/.test(prof.src) && /^notes:/.test(prof.hot) && /Comes with pool/.test(prof.text), "6513 Golf Crest Dr profile: pool and hot tub = 1 from the notes, the source shown next to each");
+await page.click('#uw-p-comps [data-act="mode"][data-v="amenity"]');
+await page.waitForTimeout(500);
+const am = await ev(() => ({ mode: UW.ui.mode, n: UW.mapApi.lastNearest.length, island: UW.matchSet.size, minRev: UW.ui.filters.minRev, rows: document.querySelectorAll("#uw-p-comps .uw-near--am .uw-mbreak").length,
+  top: UW.mapApi.lastNearest.slice(0, 3).map((x) => x.l.bedrooms + "BR/" + x.l.sleeps + (x.poolOk ? " pool ✓ " : " pool ✗ ") + x.info.prefMatched + "/" + x.info.prefTotal) }));
+check(am.mode === "amenity" && am.island === COMPS.listings.length && am.minRev === null && am.n === 25 && am.rows === 25,
+  "Match by amenities ranks all " + am.island + " island homes (no revenue floor, nothing excluded); the best 25 shown with a breakdown each: " + am.top.join(", "));
+await page.click('#uw-p-comps [data-act="more"]');
+await page.waitForTimeout(400);
+const more = await ev(() => UW.mapApi.lastNearest.length);
+check(more === 75, "“Show 50 more” continues down the ranking (" + more + " shown)");
+const before = await ev(() => UW.mapApi.lastNearest.slice(0, 10).map((x) => x.l.id).join(","));
+await page.click("#uw-profile-" + GC + ' [data-act="pflag"][data-f="pool"][data-v="0"]');
+await page.waitForTimeout(500);
+const flipped = await ev((pid) => { const pr = UW.activeVersion(UW.property(pid)).profile; return { pool: pr.flags.pool, src: pr.src.flags.pool, top: UW.mapApi.lastNearest.slice(0, 10).map((x) => x.l.id).join(","), nopool: UW.mapApi.lastNearest.slice(0, 5).every((x) => !x.l.flagSet.has("pool")) }; }, GC);
+check(flipped.pool === 0 && flipped.src === "manual" && flipped.top !== before && flipped.nopool, "a 1/0 toggle marks the flag “manual” and the matching reruns (pool = 0: no-pool homes now rank first)");
+await page.click("#uw-profile-" + GC + ' [data-act="profile-reset"]');
+await page.waitForTimeout(500);
+const reset = await ev((pid) => { const pr = UW.activeVersion(UW.property(pid)).profile; return { pool: pr.flags.pool, src: pr.src.flags.pool, top: UW.mapApi.lastNearest.slice(0, 10).map((x) => x.l.id).join(",") }; }, GC);
+check(reset.pool === 1 && /^notes:/.test(reset.src) && reset.top === before, "“Reset to sheet” restores the prefill and the original ranking");
+// Each mode keeps its own filters.
+await ev(() => { UW.ui.filters.minSleeps = 12; UW.refilter(); UW.emit("filters"); });
+await page.click('#uw-p-comps [data-act="mode"][data-v="location"]');
+await page.waitForTimeout(400);
+const locF = await ev(() => ({ mode: UW.ui.mode, minRev: UW.ui.filters.minRev, minSleeps: UW.ui.filters.minSleeps }));
+await page.click('#uw-p-comps [data-act="mode"][data-v="amenity"]');
+await page.waitForTimeout(400);
+const amF = await ev(() => ({ minSleeps: UW.ui.filters.minSleeps, chips: [...document.querySelectorAll("#uw-p-comps .uw-fchip")].map((c) => c.textContent) }));
+check(locF.mode === "location" && locF.minRev === 90000 && locF.minSleeps == null && amF.minSleeps === 12 && amF.chips.some((c) => /12/.test(c)),
+  "each mode keeps its own filters (location: $90k floor, no sleeps filter; amenities: the sleeps 12+ filter added there, shown as a removable chip)");
+await ev(() => { UW.ui.filters.minSleeps = null; UW.refilter(); UW.emit("filters"); });
+// The target popup's buttons.
+await ev(() => window.scrollTo(0, document.getElementById("uw-map").getBoundingClientRect().top + window.scrollY - 70));
+await page.waitForTimeout(300);
+await ev((pid) => UW.mapApi.openTarget(pid), GC);
+await page.waitForTimeout(500);
+const btns = await ev(() => [...document.querySelectorAll(".uw-tpop__acts button")].map((b) => b.textContent));
+check(btns.join("|") === "Match by location|Match by amenities|Open card|Copy comps|Copy revenue cases|Download UW CSV", "the target popup offers: " + btns.join(" / "));
+await page.click('.uw-tpop [data-act="tp-rank"][data-mode="location"]');
+await page.waitForTimeout(500);
+const viaPop = await ev(() => ({ mode: UW.ui.mode, n: UW.mapApi.lastNearest.length, first: UW.mapApi.lastNearest[0] && UW.mapApi.lastNearest[0].l.id }));
+check(viaPop.mode === "location" && viaPop.n > 0, "“Match by location” in the popup switches the panel to location matches (" + viaPop.n + ")");
+// Add from location, then the same home from amenities: one row, tagged Both.
+const rowsBefore = await ev((pid) => UW.activeVersion(UW.property(pid)).comps.length, GC);
+await page.click('#uw-p-comps [data-act="add"][data-id="' + viaPop.first + '"]');
+await page.waitForTimeout(300);
+await ev(([pid, id]) => UW.actions.addComps(pid, UW.activeVersion(UW.property(pid)).label, [UW.byId.get(id)], "amenity"), [GC, viaPop.first]);
+await page.waitForTimeout(300);
+const tagged = await ev(([pid, id]) => { const cs = UW.activeVersion(UW.property(pid)).comps; const c = cs.filter((x) => UW.compId(x) === id); return { n: cs.length, dup: c.length, match: c[0] && c[0].match, notes: c[0] && c[0].notes }; }, [GC, viaPop.first]);
+check(tagged.n === rowsBefore + 1 && tagged.dup === 1 && tagged.match === "both" && /^\[Location \+ Amenity match\] \d+\.\d mi from 6513 Golf Crest Dr · /.test(tagged.notes), "added from both modes: one row, “" + tagged.notes + "”");
+await ev((pid) => { UW.ui.expanded.add(pid); UW.cardsApi.renderCard(pid); }, GC);
+await page.selectOption("#uw-card-" + GC + " select[data-cmatch]", "both");
+await page.waitForTimeout(300);
+const vis = await ev((pid) => [...document.querySelectorAll("#uw-card-" + pid + " .uw-comps tbody tr")].filter((tr) => !tr.hidden && tr.offsetParent).map((tr) => tr.dataset.match), GC);
+check(vis.length === 1 && vis[0] === "both", "the Match column filter shows only the Both row (" + vis.join(", ") + ")");
+await page.selectOption("#uw-card-" + GC + " select[data-cmatch]", "");
+await page.waitForTimeout(200);
+const sheetNotes = await ev((pid) => UW.activeVersion(UW.property(pid)).comps.filter((c) => (c.match || "sheet") === "sheet").map((c) => c.notes), GC);
+const baseNotes = UWJ.properties.find((p) => p.id === GC).versions.find((v) => v.label === "101").comps.map((c) => c.notes);
+check(sheetNotes.length === baseNotes.length && sheetNotes.every((n) => baseNotes.includes(n)), "sheet rows keep their notes as written until asked");
+await page.click("#uw-card-" + GC + ' [data-act="append-distance"]');
+await page.waitForTimeout(300);
+const appended = await ev((pid) => UW.activeVersion(UW.property(pid)).comps.map((c) => [c.match || "sheet", c.notes]), GC);
+check(appended.filter((x) => x[0] === "sheet").every((x) => / · \d+\.\d mi from 6513 Golf Crest Dr$/.test(x[1]) || !/\S/.test(x[1]) || / mi from 6513 Golf Crest Dr$/.test(x[1])) && appended.find((x) => x[0] === "both")[1] === tagged.notes,
+  "“Append distance to notes” adds “· X.X mi from 6513 Golf Crest Dr” to sheet rows only");
+await ev((pid) => UW.revert(pid, "101"), GC);
+
+console.log("6. Console");
 check(errors.length === 0, "no console errors" + (errors.length ? ": " + errors.join(" | ") : ""));
 await browser.close();
 server.close();

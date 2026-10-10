@@ -7,6 +7,9 @@
 //  4. Comp audit: the known cases, browser classes = build classes, Zillow URLs, the picker.
 //  5. Scenarios: labels and defaults; target bedrooms read from the notes.
 //  6. Copy rows: one path for map / popup / card, always revenue high -> low; CSV comp rows too.
+//  7. Target profile and the two matching modes: prefill sources, the island-wide amenity
+//     ranking (nothing excluded; bedrooms > sleeps > pool > other flags), location ranking
+//     untouched by amenity edits, comp-set tags / distance / no duplicates / cap of 15.
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -277,7 +280,7 @@ const f0 = mapLines[0].split("\t");
 const okFmt = f0.length === 15 && /^https:\/\/www\.airbnb\.com\/rooms\/\d+$/.test(f0[0]) && /^\d+$/.test(f0[1]) && /^\d+\.\d\d$/.test(f0[4]) && /^\d+\.\d\d%$/.test(f0[5]) && f0.slice(6, 14).every((x) => x === "0" || x === "1");
 console.log(`  ${okFmt ? "ok  " : "FAIL"} 15 columns, plain-integer revenue, 2-decimal ADR, percent occupancy, 0/1 flags; note: "${f0[14]}"`);
 if (!okFmt) fail("copy format");
-if (!/^\d+BR\/[\d.]+BA · sleeps \d+( · [a-z +]+)? · (Gulf-front|Beach walk|Bay \/ canal|Inland) · [^·]+ · \d+\.\d mi from /.test(f0[14])) fail("note format: " + f0[14]);
+if (!/^\d+\.\d mi from [^·]+ · \d+BR\/[\d.]+BA · sleeps \d+( · [a-z +]+)? · (Gulf-front|Beach walk|Bay \/ canal|Inland) · [^·]+$/.test(f0[14])) fail("note format: " + f0[14]);
 // Ties break by ADR, high to low.
 const tie = C.compsTSV([{ url: "a", revenue: 100000, adr: 300, flags: {} }, { url: "b", revenue: 100000, adr: 450, flags: {} }, { url: "c", revenue: 120000, adr: 100, flags: {} }]).split("\n").map((x) => x.split("\t")[0]).join("");
 console.log(`  ${tie === "cba" ? "ok  " : "FAIL"} ties break by ADR (high to low): ${tie}`);
@@ -292,6 +295,129 @@ if (tie !== "cba") fail("tie break");
   const ok = rv.length === v.comps.length && rv.every((r, i) => !i || r <= rv[i - 1]) && C.amortBlock(out) === C.amortBlock(src(v.file));
   console.log(`  ${ok ? "ok  " : "FAIL"} Download UW CSV writes comp rows revenue high to low; amortization block still byte-identical`);
   if (!ok) fail("CSV comp order");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n7. TARGET PROFILE AND MATCHING\n");
+const median = (beds) => { const a = COMPS.listings.filter((l) => l.bedrooms === beds).map((l) => l.sleeps).sort((x, y) => x - y); return a.length ? Math.round(a.length % 2 ? a[(a.length - 1) / 2] : (a[a.length / 2 - 1] + a[a.length / 2]) / 2) : null; };
+const prefillOf = (label) => {
+  const p = UW.properties.find((x) => x.versions.some((v) => v.label === label)), v = p.versions.find((x) => x.label === label);
+  return { p, v, pr: R.profilePrefill({ setup: v.inputs.setup, notes: v.notes, loc: p.place && p.place.loc, sleepsMedian: median }) };
+};
+{
+  const exp = {
+    "96": { pool: 1, hot_tub: 1 },
+    "97": { pool: 0, hot_tub: 1, mini_golf: 1 },
+    "101": { pool: [1, "notes"], hot_tub: [1, "notes"], waterfront: 1 },
+    "92": { pool: 1, hot_tub: 1, pool_heater: 1, mini_golf: 1, game_room: 1 },
+    "104": { pickleball: 1, mini_golf: 1 },     // "PickleBall Court (with hoops), Mini Golf, Bowling Alley": both, from one item
+    "102": { pool: [1, "notes"] },              // "Hot Tub (...), Pool Spillover?" is not a new pool; the notes say it comes with one
+  };
+  Object.entries(exp).forEach(([label, want]) => {
+    const { p, pr } = prefillOf(label);
+    const bad = Object.entries(want).filter(([f, w]) => { const [val, from] = Array.isArray(w) ? w : [w, null]; return pr.flags[f] !== val || (from && !pr.src.flags[f].startsWith(from + ":")); });
+    const shown = Object.keys(want).map((f) => f + "=" + pr.flags[f] + " (" + pr.src.flags[f].slice(0, 34) + ")").join(", ");
+    console.log(`  ${bad.length ? "FAIL" : "ok  "} file ${label} ${p.street}: ${shown}`);
+    if (bad.length) fail("profile prefill " + label + ": " + bad.map((b) => b[0]).join(", "));
+  });
+  // Never a flag without a source; a 0 says nothing mentions it.
+  const noSrc = [];
+  UW.properties.forEach((p) => p.versions.forEach((v) => {
+    const pr = prefillOf(v.label).pr;
+    R.PROFILE_FLAGS.forEach((f) => { const sc = pr.src.flags[f]; if (pr.flags[f] ? !/^(setup|notes|location): ./.test(sc) : sc !== "nothing mentions it") noSrc.push(v.label + " " + f); });
+  }));
+  console.log(`  ${noSrc.length ? "FAIL" : "ok  "} every flag set to 1 names its source (setup item / notes / location); every 0 reads "nothing mentions it"`);
+  if (noSrc.length) fail("flags without a source: " + noSrc.join(", "));
+  const { pr } = prefillOf("96");
+  const okSl = pr.sleeps === median(pr.beds) && /^default: edit/.test(pr.src.sleeps);
+  console.log(`  ${okSl ? "ok  " : "FAIL"} sleeps defaults to the median of ${pr.beds}BR Cleaned_Data homes (${pr.sleeps}), labelled "${pr.src.sleeps}"`);
+  if (!okSl) fail("sleeps default");
+  const ed = R.profileWith(pr, { sleeps: 20, flags: { pool: 0, fire_pit: 1 } });
+  const okEd = ed.sleeps === 20 && ed.src.sleeps === "manual" && ed.flags.pool === 0 && ed.src.flags.pool === "manual" && ed.flags.fire_pit === 1 &&
+    JSON.stringify(R.profileWith(pr, null)) === JSON.stringify(pr) && pr.flags.pool === 1;
+  console.log(`  ${okEd ? "ok  " : "FAIL"} edits read "manual" and leave the prefill alone; "Reset to sheet" (no edits) gives the prefill back`);
+  if (!okEd) fail("profile edits");
+}
+{
+  // Amenity matching: constructed homes, one rule at a time. Nothing is ever excluded.
+  const mk = (id, beds, sleeps, flags, revenue) => ({ id, bedrooms: beds, sleeps, revenue: revenue || 100000, adr: 500, flagSet: new Set(flags) });
+  const prof = { beds: 5, sleeps: 16, flags: { pool: 1, hot_tub: 1, game_room: 1 } };
+  const rules = { bedsExact: true, sleepsWindow: 2, pool: null, prefs: Object.fromEntries(R.AMENITY_ORDER.map((f) => [f, "prefer"])) };
+  const order = (cands, r) => R.matchAmenity(cands, prof, r || rules).map((x) => x.l.id).join("");
+  const cases = [
+    ["bedrooms beat sleeps, pool and amenities", [mk("b", 6, 16, ["pool", "hot_tub", "game_room"], 300000), mk("a", 5, 30, [])], "ab"],
+    ["sleeps beat pool", [mk("b", 5, 24, ["pool", "hot_tub", "game_room"]), mk("a", 5, 16, [])], "ab"],
+    ["pool beats the other amenities", [mk("b", 5, 16, ["hot_tub", "game_room"]), mk("a", 5, 16, ["pool"])], "ab"],
+    ["more preferred amenities rank higher", [mk("b", 5, 16, ["pool", "hot_tub"]), mk("a", 5, 16, ["pool", "hot_tub", "game_room"])], "ab"],
+    ["the earlier flag breaks a tie (hot tub before game room), ahead of revenue", [mk("b", 5, 16, ["pool", "game_room"], 200000), mk("a", 5, 16, ["pool", "hot_tub"])], "ab"],
+    ["then revenue, high to low", [mk("b", 5, 16, ["pool"], 90000), mk("a", 5, 16, ["pool"], 150000)], "ab"],
+    ["the closer bedroom count ranks higher (6 before 8, 2 last)", [mk("c", 2, 6, []), mk("b", 8, 16, ["pool"]), mk("a", 6, 16, ["pool"])], "abc"],
+  ];
+  cases.forEach(([what, cands, want]) => { const got = order(cands); console.log(`  ${got === want ? "ok  " : "FAIL"} amenity order: ${what} (${got})`); if (got !== want) fail("amenity order: " + what); });
+  const pm1 = order([mk("b", 5, 30, []), mk("a", 6, 16, ["pool", "hot_tub", "game_room"])], Object.assign({}, rules, { bedsExact: false }));
+  const must = order([mk("b", 5, 16, ["pool", "hot_tub"]), mk("a", 5, 16, ["pool", "game_room"])], Object.assign({}, rules, { prefs: Object.assign({}, rules.prefs, { game_room: "must" }) }));
+  const noPool = order([mk("b", 5, 16, ["pool"]), mk("a", 5, 16, [])], Object.assign({}, rules, { pool: 0 }));
+  const okM = pm1 === "ab" && must === "ab" && noPool === "ab";
+  console.log(`  ${okM ? "ok  " : "FAIL"} "5 ±1" counts a 6BR as a bedroom match; "Must match" ranks a matching home first; "Find no-pool comps" ranks no-pool homes first (${pm1} ${must} ${noPool})`);
+  if (!okM) fail("amenity rule toggles");
+  // The whole island, best to worst: every home comes back, in rule order.
+  const { pr } = prefillOf("96");
+  const island = [...byId.values()];
+  const ranked = R.matchAmenity(island, pr, rules);
+  const key = (x) => [x.bedsTier, x.sleepsTier, x.poolOk ? 0 : 1, x.mustMiss, -x.info.prefMatched];
+  const mono = ranked.every((x, i) => { if (!i) return true; const a = key(ranked[i - 1]), b = key(x); for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return a[k] < b[k]; return true; });
+  const okI = ranked.length === island.length && new Set(ranked.map((x) => x.l.id)).size === island.length && mono;
+  console.log(`  ${okI ? "ok  " : "FAIL"} 11706 Opihi (With pool): all ${ranked.length} of ${island.length} island homes ranked, none excluded; best ${ranked[0].l.bedrooms}BR sleeps ${ranked[0].l.sleeps}, worst ${ranked[ranked.length - 1].l.bedrooms}BR`);
+  if (!okI) fail("amenity matching must rank the whole island");
+}
+{
+  // Location ranking ignores the profile's amenities and the amenity rules.
+  const { p, pr } = prefillOf("101");
+  const t = { lat: p.geo.lat, lng: p.geo.lng, zone: p.place.zone, waterType: p.place.waterfrontDefault, beds: pr.beds };
+  const ids = (prof) => R.matchLocation([...byId.values()], Object.assign({}, t, { beds: prof.beds }), { zone: true, water: true, radius: null }).map((x) => x.l.id).join(",");
+  const a = ids(pr), b = ids(R.profileWith(pr, { flags: { pool: 0, hot_tub: 0, game_room: 0, waterfront: 0, sauna: 1 } }));
+  const okL = a === b && a.length > 0;
+  console.log(`  ${okL ? "ok  " : "FAIL"} Match by location: the same ranking after every amenity flag on 6513 Golf Crest Dr is flipped (${a.split(",").length} homes)`);
+  if (!okL) fail("location ranking changed with amenity edits");
+}
+{
+  // Comp set: tags and distance to its own target, retag without duplicates, sheet notes untouched, cap of 15.
+  const { p, v } = prefillOf("101");
+  const target = { lat: p.geo.lat, lng: p.geo.lng, street: p.street };
+  const areaName = (l) => COMPS.areas.find((a) => a.id === l.area).name;
+  const sheet = v.comps.map((c) => Object.assign({}, c, { match: "sheet" }));
+  const inSheet = new Set(sheet.map((c) => c.id || R.roomId(c.url)));
+  const fresh = [...byId.values()].filter((l) => !inSheet.has(l.id) && R.canPick(l.id, byId));
+  const l = fresh[0];
+  const note = (mode) => (x) => R.autoNote(x, areaName(x), target, mode, { prefMatched: 2, prefTotal: 3 });
+  const r1 = R.addToSet(sheet, l, { byId, mode: "location", note: note("location") });
+  const added = r1.rows[r1.rows.length - 1];
+  const d = Math.max(0.1, Math.round(R.miles(target.lat, target.lng, l.lat, l.lng) * 10) / 10).toFixed(1);
+  const okTag = r1.result === "added" && added.match === "location" && added.notes.startsWith("[Location match] " + d + " mi from " + p.street + " · ");
+  console.log(`  ${okTag ? "ok  " : "FAIL"} added from Match by location: "${added.notes}"`);
+  if (!okTag) fail("location tag / distance");
+  const r2 = R.addToSet(r1.rows, l, { byId, mode: "amenity", note: note("amenity") });
+  const both = r2.rows.find((x) => x.id === l.id);
+  const okBoth = r2.result === "both" && r2.rows.length === r1.rows.length && both.match === "both" && both.notes === "[Location + Amenity match] " + added.notes.replace("[Location match] ", "");
+  const r3 = R.addToSet(r2.rows, l, { byId, mode: "amenity", note: note("amenity") });
+  const okDup = r3.result === "duplicate" && r3.rows.length === r2.rows.length;
+  console.log(`  ${okBoth && okDup ? "ok  " : "FAIL"} re-added from Match by amenities: one row, retagged "[Location + Amenity match]"; a third add is a duplicate`);
+  if (!okBoth || !okDup) fail("retag / duplicate");
+  const a1 = R.addToSet(sheet, fresh[1], { byId, mode: "amenity", note: note("amenity") }).rows.slice(-1)[0];
+  const okAm = a1.notes.startsWith("[Amenity match] ") && / mi from 6513 Golf Crest Dr · /.test(a1.notes) && / · 2 of 3 preferred · /.test(a1.notes);
+  console.log(`  ${okAm ? "ok  " : "FAIL"} added from Match by amenities: "${a1.notes}"`);
+  if (!okAm) fail("amenity tag");
+  const untouched = r2.rows.filter((x) => x.match === "sheet").every((x, i) => x.notes === sheet[i].notes);
+  const app = R.appendDistance(r2.rows, target, byId);
+  const okApp = untouched && app.filter((x) => x.match === "sheet" && byId.has(x.id || R.roomId(x.url))).every((x) => / mi from 6513 Golf Crest Dr$/.test(x.notes)) &&
+    app.find((x) => x.id === l.id).notes === both.notes && JSON.stringify(R.appendDistance(app, target, byId)) === JSON.stringify(app);
+  console.log(`  ${okApp ? "ok  " : "FAIL"} sheet notes stay as written until "Append distance to notes"; it adds "· X.X mi from ${p.street}" once, to sheet rows only`);
+  if (!okApp) fail("append distance");
+  let rows = sheet, last;
+  for (const x of fresh.slice(2, 30)) { last = R.addToSet(rows, x, { byId, mode: "location", note: note("location") }); rows = last.rows; }
+  const okCap = rows.length === 15 && last.result === "full";
+  console.log(`  ${okCap ? "ok  " : "FAIL"} a comp set stops at 15 rows ("full")`);
+  if (!okCap) fail("cap of 15");
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nALL TESTS PASSED");

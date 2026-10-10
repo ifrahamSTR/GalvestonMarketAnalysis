@@ -20,7 +20,7 @@
 /* global UWMath, UWGeo, UWCsv, UWRules */
 (function () {
   const UW = (window.UW = {});
-  UW.VERSION = "20261010-uw3";
+  UW.VERSION = "20261011-uw4";
   const LS_KEY = "galvestonUW.v1";
 
   // ---------------------------------------------------------------------------
@@ -196,18 +196,31 @@
   // ---------------------------------------------------------------------------
   UW.ui = { selected: null, versions: {}, expanded: new Set(), colorBy: "revenue", n: 12, radius: null, sort: "distance",
     layers: { areas: true, labels: true, shoreline: false, ghosts: true, uw: true, newl: true }, listSort: { key: "area", dir: 1 },
-    matchZoneWater: true, pure: false, compsView: "nearest", picked: new Set() };
+    pure: false, compsView: "nearest", picked: new Set(), cmatch: {},
+    // Two separate ways to find comps; each keeps its own extra filters and rules.
+    mode: "location",
+    locRules: { zone: true, water: true },
+    amRules: { bedsExact: true, sleepsWindow: 2, pool: null, prefs: Object.fromEntries(UWRules.AMENITY_ORDER.map((f) => [f, "prefer"])) } };
   // A scenario's display name ("With pool"), from data/version_labels.json; "File NN" otherwise.
   UW.scenarioName = (v) => v.scenario || (v.file ? "File " + v.label : "Draft");
 
   UW.parseNotes = (text) => UWRules.parseNotes(text);
 
-  // Target configuration (the house as it will be run): saved edit, else the notes' converted count.
-  function targetOf(details, saved) {
-    const t = saved || {};
-    return { beds: t.beds != null ? t.beds : details.targetBeds, baths: t.baths != null ? t.baths : details.targetBaths, sleeps: t.sleeps != null ? t.sleeps : null,
-      from: saved && (saved.beds != null || saved.baths != null || saved.sleeps != null) ? "edited" : details.targetFrom };
+  // Median sleeps of Cleaned_Data entire homes with a given bedroom count (the "default: edit" for sleeps).
+  UW.sleepsMedian = function (beds) {
+    if (beds == null) return null;
+    const s = UW.listings.filter((l) => l.bedrooms === beds).map((l) => l.sleeps).sort((a, b) => a - b);
+    if (!s.length) return null;
+    const m = s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
+    return Math.round(m);
+  };
+  // Target profile (configuration + amenity flags) for one scenario: the prefill from its own
+  // setup items, notes and location, with any manual edits on top.
+  function profileOf(inputs, notes, loc, edit) {
+    const pre = UWRules.profilePrefill({ setup: inputs.setup, notes, loc, sleepsMedian: UW.sleepsMedian });
+    return UWRules.profileWith(pre, edit);
   }
+  const profileEdit = (e) => (e && (e.profile || e.target) ? Object.assign({}, e.target || {}, e.profile || {}) : null);  // e.target: the earlier beds/baths/sleeps edit
   const withStatus = (comps) => UWCsv.sortComps(comps).map((c) => Object.assign({}, c, UW.compStatus(c)));
 
   function placeFor(geo, notes, waterfront) {
@@ -228,8 +241,8 @@
       return {
         label: v.label, file: v.file, files: v.files, number: v.number, url: v.url, preparedBy: v.preparedBy, sheet: v.sheet, layout: v.layout, checks: v.checks,
         scenario: v.scenario, isDefault: v.isDefault, auditSummary: v.auditSummary,
-        base: v, notes, inputs, comps: withStatus(comps), details, target: targetOf(details, e.target),
-        edited: { inputs: inputsEdited, notes: e.notes != null && e.notes !== v.notes, comps: !!e.comps, target: !!e.target },
+        base: v, notes, inputs, comps: withStatus(comps), details, profileEdit: profileEdit(e),
+        edited: { inputs: inputsEdited, notes: e.notes != null && e.notes !== v.notes, comps: !!e.comps, profile: !!profileEdit(e) },
         outputs: inputsEdited ? UWMath.compute(inputs) : UWMath.fromSheet(v.sheet), source: inputsEdited ? "recalculated" : "sheet",
       };
     });
@@ -238,6 +251,7 @@
     let place = base.place;
     if (pe.pin || pe.waterfront || (def && def.edited.notes)) place = placeFor(geo, def && def.notes, waterfront);
     if (place && !place.areaName) place.areaName = (UW.areaById[place.area] || {}).name;
+    versions.forEach((v) => { v.profile = profileOf(v.inputs, v.notes, place && place.loc, v.profileEdit); v.target = v.profile; });
     return { id: base.id, kind: "underwritten", street: base.street, address: base.address, url: base.url, zip: base.zip, geo, place,
       waterfront: waterfront || (place ? place.waterfrontDefault : "None"), versions, defaultVersion: base.defaultVersion, pinEdited: !!pe.pin,
       geoNote: base.geo ? (base.geo.approximate ? "Census geocoder matched a shortened address" : base.geo.source === "nominatim" ? "OpenStreetMap (Nominatim)" : base.geo.source === "override" ? "data/geocode_overrides.json" : "US Census geocoder") : null,
@@ -250,9 +264,11 @@
     const place = placeFor(l.pin, notes, l.waterfront);
     if (place) place.areaName = (UW.areaById[place.area] || {}).name;
     const details = UW.parseNotes(notes);
+    const pedit = l.profile || l.target ? Object.assign({}, l.target || {}, l.profile || {}) : null;
+    const prof = profileOf(inputs, notes, place && place.loc, pedit);
     const v = { label: "Draft", file: null, files: [], url: l.url, sheet: null, checks: [], base: null, notes, inputs, scenario: "Draft", isDefault: true,
-      comps: withStatus(l.comps || []), details, target: targetOf(details, l.target),
-      edited: { inputs: true, notes: false, comps: false, target: !!l.target }, outputs: UWMath.compute(inputs), source: "recalculated" };
+      comps: withStatus(l.comps || []), details, profile: prof, target: prof, profileEdit: pedit,
+      edited: { inputs: true, notes: false, comps: false, profile: !!pedit }, outputs: UWMath.compute(inputs), source: "recalculated" };
     return { id: l.id, kind: l.promoted ? "promoted" : "new", street: l.street, address: l.address, url: l.url, zip: l.zip, geo: l.pin || null, place,
       waterfront: l.waterfront && l.waterfront !== "auto" ? l.waterfront : place ? place.waterfrontDefault : "None", versions: [v], defaultVersion: "Draft",
       listing: l, local: !!UW.local.listings.find((x) => x.id === l.id), geoNote: l.pin ? (l.pin.source === "manual" ? "placed by hand" : "OpenStreetMap (Nominatim)" + (l.pin.approximate ? ", street only" : "")) : null };
@@ -294,21 +310,29 @@
   };
   UW.setComps = function (pid, label, comps, opts) {
     // Stored in revenue order (sheet revenue, then ADR), so an added comp drops into its place.
-    const clean = UWCsv.sortComps(comps).slice(0, 15).map((c) => ({ url: c.url, id: c.id, revenue: c.revenue, bedrooms: c.bedrooms, sleeps: c.sleeps, adr: c.adr,
-      occupancy: c.occupancy, flags: Object.assign({}, c.flags), notes: c.notes || "" }));
+    const clean = UWCsv.sortComps(comps).slice(0, 15).map((c) => Object.assign({ url: c.url, id: c.id, revenue: c.revenue, bedrooms: c.bedrooms, sleeps: c.sleeps, adr: c.adr,
+      occupancy: c.occupancy, flags: Object.assign({}, c.flags), notes: c.notes || "" }, c.match && c.match !== "sheet" ? { match: c.match } : {}));
     if (UW.isNew(pid)) ownListing(pid).comps = clean;
     else localVer(pid, label).comps = clean;
     UW.save();
     if (opts && opts.quiet) return;  // typing in a comp's notes: no re-render
     UW.emit("property", pid); UW.emit("comps", pid);
   };
-  UW.setTarget = function (pid, label, cfg) {
+  /** Save the scenario's profile edits ({beds, baths, sleeps, flags}); null = back to the sheet's prefill. */
+  UW.setProfile = function (pid, label, edit) {
     const clean = {};
-    ["beds", "baths", "sleeps"].forEach((k) => { if (cfg[k] != null && cfg[k] !== "" && !isNaN(cfg[k])) clean[k] = Number(cfg[k]); });
-    if (UW.isNew(pid)) ownListing(pid).target = Object.keys(clean).length ? clean : undefined;
-    else { const e = localVer(pid, label); if (Object.keys(clean).length) e.target = clean; else delete e.target; }
-    UW.save(); UW.emit("property", pid);
+    if (edit) {
+      ["beds", "baths", "sleeps"].forEach((k) => { if (edit[k] != null && edit[k] !== "" && !isNaN(edit[k])) clean[k] = Number(edit[k]); });
+      const fl = {};
+      Object.entries(edit.flags || {}).forEach(([f, v]) => { if (v === 0 || v === 1) fl[f] = v; });
+      if (Object.keys(fl).length) clean.flags = fl;
+    }
+    const has = Object.keys(clean).length > 0;
+    if (UW.isNew(pid)) { const l = ownListing(pid); delete l.target; if (has) l.profile = clean; else delete l.profile; }
+    else { const e = localVer(pid, label); delete e.target; if (has) e.profile = clean; else delete e.profile; }
+    UW.save(); UW.emit("property", pid); UW.emit("profile", pid);
   };
+  UW.setTarget = (pid, label, cfg) => UW.setProfile(pid, label, Object.assign({}, (UW.property(pid).versions.find((v) => v.label === label) || {}).profileEdit || {}, cfg));
   UW.editSource = function (pid, label) {
     const l = ((UW.local.edits[pid] || {}).versions || {})[label];
     if (l && !l.reverted && Object.keys(l).length) return "browser";
@@ -368,7 +392,7 @@
         if (e.inputs && !same(e.inputs, v.inputs)) clean.inputs = e.inputs;
         if (e.notes != null && e.notes !== v.notes) clean.notes = e.notes;
         if (e.comps) clean.comps = e.comps;
-        if (e.target) clean.target = e.target;
+        if (e.profile || e.target) clean.profile = Object.assign({}, e.target || {}, e.profile || {});
         if (Object.keys(clean).length) (out.versions = out.versions || {})[v.label] = clean;
       });
       if (Object.keys(out).length) edits[pid] = out;
@@ -404,18 +428,24 @@
   UW.canPick = (id) => UWRules.canPick(id, UW.byId);
   // The target a note measures distance from (the selected target, or the one being added to).
   const targetPos = (p) => (p && p.geo ? { lat: p.geo.lat, lng: p.geo.lng, street: p.street } : null);
-  UW.compNote = (l, p) => UWRules.autoNote(l, (UW.areaById[l.area] || {}).name, targetPos(p));
-  UW.compFromListing = function (l, notes, p) {
+  UW.targetPos = targetPos;
+  // Notes from workbook data only, tagged with the mode the comp came from (no target: no tag, no distance).
+  UW.compNote = function (l, p, mode) {
+    mode = mode || UW.ui.mode;
+    const info = p && mode === "amenity" ? UWRules.amenityInfo(l, UW.activeVersion(p).profile, UW.ui.amRules.prefs) : null;
+    return UWRules.autoNote(l, (UW.areaById[l.area] || {}).name, targetPos(p), mode, info);
+  };
+  UW.compFromListing = function (l, notes, p, mode) {
     if (!UW.canPick(l.id)) throw new Error("Only Cleaned_Data entire homes can be comps");
-    return UWRules.rowFromListing(l, notes == null ? UW.noteFor(l, p) : notes);
+    return UWRules.rowFromListing(l, notes == null ? UW.noteFor(l, p, mode) : notes, mode && p ? mode : null);
   };
 
-  // Notes edited in the map lists before copying: kept for this browser session only.
+  // Notes edited in the map lists before copying: kept for this browser session only (per target and mode).
   const SN_KEY = "galvestonUW.sessionNotes";
   let sessionNotes = {};
   function loadSessionNotes() { try { sessionNotes = JSON.parse(sessionStorage.getItem(SN_KEY) || "{}") || {}; } catch (e) { sessionNotes = {}; } }
-  const noteKey = (l, p) => l.id + "|" + (p ? p.id : "-");
-  UW.noteFor = (l, p) => (sessionNotes[noteKey(l, p)] != null ? sessionNotes[noteKey(l, p)] : UW.compNote(l, p));
+  const noteKey = (l, p, mode) => l.id + "|" + (p ? p.id : "-") + "|" + (mode || UW.ui.mode);
+  UW.noteFor = (l, p, mode) => { const k = noteKey(l, p, mode); return sessionNotes[k] != null ? sessionNotes[k] : UW.compNote(l, p, mode); };
   UW.setSessionNote = function (l, p, text) {
     const k = noteKey(l, p);
     if (text == null || text === UW.compNote(l, p)) delete sessionNotes[k]; else sessionNotes[k] = text;
@@ -443,8 +473,10 @@
   // ---------------------------------------------------------------------------
   // Filters (apply to the Airbnb dots and the nearest-comp list) + URL hash
   // ---------------------------------------------------------------------------
-  UW.defaultFilters = () => ({ minRev: 90000, maxRev: null, beds: [], minSleeps: null, minBaths: null, am: {}, loc: [], area: [], zone: "", sizeTop: [], quality: [], fav: "" });
-  UW.ui.filters = UW.defaultFilters();
+  // Extra filters, one set per matching mode. The revenue floor is $90k for location, off for amenities.
+  UW.defaultFilters = (mode) => ({ minRev: (mode || UW.ui.mode) === "amenity" ? null : 90000, maxRev: null, beds: [], minSleeps: null, minBaths: null, am: {}, loc: [], area: [], zone: "", sizeTop: [], quality: [], fav: "" });
+  UW.ui.filtersByMode = { location: UW.defaultFilters("location"), amenity: UW.defaultFilters("amenity") };
+  Object.defineProperty(UW.ui, "filters", { enumerable: true, get() { return this.filtersByMode[this.mode]; }, set(v) { this.filtersByMode[this.mode] = v; } });
   UW.bedBucket = (b) => (b <= 1 ? 1 : b >= 7 ? 7 : Math.round(b));
   UW.matches = function (l, f) {
     f = f || UW.ui.filters;
@@ -469,38 +501,21 @@
   };
   UW.setFilters = function (patch) { Object.assign(UW.ui.filters, patch); UW.applyFilters(); };
   UW.resetFilters = function () { UW.ui.filters = UW.defaultFilters(); UW.applyFilters(); };
-  /**
-   * "Match this property": the target configuration's bedrooms +/- 1 (and sleeps
-   * at least the target's, when set), plus the same Town / West End zone and
-   * waterfront type unless "Same zone & water type" is off. opts.am adds
-   * amenity rules (e.g. {pool: -1} for a no-pool scenario).
-   */
-  UW.matchFilters = function (p, opts) {
-    opts = opts || {};
-    const v = UW.activeVersion(p), t = v.target;
-    const f = UW.defaultFilters();
-    const b = t.beds != null ? t.beds : p.listing && p.listing.facts ? p.listing.facts.projBeds || p.listing.facts.beds : null;
-    if (b != null) f.beds = [b - 1, b, b + 1].filter((x) => x >= 1).map(UW.bedBucket).filter((x, i, a) => a.indexOf(x) === i);
-    if (t.sleeps != null) f.minSleeps = t.sleeps;
-    if (UW.ui.matchZoneWater) {
-      if (p.place) f.zone = p.place.zone;
-      f.loc = (UW.WATERFRONT_LOC[p.waterfront] || []).slice();
-    }
-    if (opts.am) f.am = Object.assign({}, opts.am);
-    return f;
-  };
-  UW.matchProperty = function (p, opts) {
-    UW.ui.filters = UW.matchFilters(p, opts);
+  UW.refilter = function () { UW.matchSet = new Set(UW.listings.filter((l) => UW.matches(l)).map((l) => l.id)); };
+  /** Switch matching mode; each mode keeps its own extra filters and rules. */
+  UW.setMode = function (mode) {
+    if (!["location", "amenity"].includes(mode)) return;
+    UW.ui.nByMode = UW.ui.nByMode || {};
+    UW.ui.nByMode[UW.ui.mode] = UW.ui.n;
+    UW.ui.mode = mode;
+    UW.ui.n = UW.ui.nByMode[mode] || (mode === "amenity" ? 25 : 12);
     UW.ui.pure = false;
     UW.applyFilters();
+    UW.emit("near");
+    UW.emit("mode");
   };
-  // Plain straight-line nearest: only the revenue threshold.
-  UW.pureNearest = function () {
-    const keep = UW.ui.filters.minRev;
-    UW.ui.filters = Object.assign(UW.defaultFilters(), { minRev: keep });
-    UW.ui.pure = true;
-    UW.applyFilters();
-  };
+  // Plain straight-line nearest: no rules, no filters, Cleaned_Data entire homes only.
+  UW.pureNearest = function (on) { UW.ui.pure = on !== false; if (UW.ui.pure) UW.ui.mode = "location"; UW.applyFilters(); UW.emit("near"); UW.emit("mode"); };
   UW.countActiveFilters = function () {
     const f = UW.ui.filters, d = UW.defaultFilters();
     let n = 0;
@@ -514,19 +529,30 @@
     return n;
   };
 
-  // Nearest listings to a property among those passing the filters.
-  UW.nearest = function (p) {
-    if (!p || !p.geo) return [];
-    const out = [];
-    UW.listings.forEach((l) => {
-      if (!UW.matchSet.has(l.id)) return;
-      const d = UWGeo.miles(p.geo.lat, p.geo.lng, l.lat, l.lng);
-      if (UW.ui.radius != null && d > UW.ui.radius) return;
-      out.push({ l, d });
-    });
-    out.sort((a, b) => a.d - b.d);
-    return out.slice(0, UW.ui.n).map((x, i) => Object.assign(x, { rank: i + 1 }));
+  /**
+   * The selected target's comps in the current mode, over the listings that pass the mode's
+   * extra filters: by location (distance within zone and water type, bedrooms +/-1), by
+   * amenities (island-wide, strict priority), or pure straight-line nearest.
+   * Each result: {l, d, rank, info?}.
+   */
+  UW.results = function (p) {
+    if (!p) return [];
+    const v = UW.activeVersion(p), prof = v.profile;
+    const dist = (l) => (p.geo ? UWGeo.miles(p.geo.lat, p.geo.lng, l.lat, l.lng) : null);
+    let out;
+    if (UW.ui.pure) {
+      if (!p.geo) return [];
+      out = UW.listings.map((l) => ({ l, d: dist(l) })).filter((x) => UW.ui.radius == null || x.d <= UW.ui.radius).sort((a, b) => a.d - b.d);
+    } else if (UW.ui.mode === "amenity") {
+      out = UWRules.matchAmenity(UW.listings.filter((l) => UW.matchSet.has(l.id)), prof, UW.ui.amRules).map((x) => Object.assign(x, { d: dist(x.l) }));
+    } else {
+      if (!p.geo) return [];
+      out = UWRules.matchLocation(UW.listings.filter((l) => UW.matchSet.has(l.id)),
+        { lat: p.geo.lat, lng: p.geo.lng, zone: p.place && p.place.zone, waterType: p.waterfront, beds: prof.beds }, Object.assign({ radius: UW.ui.radius }, UW.ui.locRules));
+    }
+    return out.slice(0, UW.ui.n).map((x, i) => Object.assign(x, { rank: i + 1, info: x.info || UWRules.amenityInfo(x.l, prof, UW.ui.amRules.prefs) }));
   };
+  UW.nearest = UW.results;
 
   UW.select = function (pid, opts) {
     opts = opts || {};
@@ -535,15 +561,20 @@
     if (pid) {
       const p = UW.property(pid);
       if (!p) UW.ui.selected = null;
-      // Picking a target ranks comps like it: "Match this property" is applied (its filters show as removable chips).
-      else if (changed && opts.match !== false) { UW.ui.filters = UW.matchFilters(p); UW.ui.pure = false; UW.matchSet = new Set(UW.listings.filter((l) => UW.matches(l)).map((l) => l.id)); UW.emit("filters"); }
+      // Picking a target opens Match by location (or the mode asked for).
+      else if (changed || opts.mode) {
+        UW.ui.nByMode = UW.ui.nByMode || {};
+        UW.ui.nByMode[UW.ui.mode] = UW.ui.n;
+        UW.ui.mode = opts.mode || "location";
+        UW.ui.n = UW.ui.nByMode[UW.ui.mode] || (UW.ui.mode === "amenity" ? 25 : 12);
+        UW.ui.pure = false; UW.ui.amRules.pool = null; UW.refilter(); UW.emit("filters");
+      }
     }
     UW.writeHash();
     UW.emit("select", Object.assign({ pid: UW.ui.selected }, opts || {}));
   };
   UW.setVersion = function (pid, label) {
     UW.ui.versions[pid] = label;
-    if (UW.ui.selected === pid) { UW.ui.filters = UW.matchFilters(UW.property(pid)); UW.matchSet = new Set(UW.listings.filter((l) => UW.matches(l)).map((l) => l.id)); UW.emit("filters"); }
     UW.writeHash();
     UW.emit("property", pid); UW.emit("comps", pid); UW.emit("places");
   };
@@ -554,6 +585,8 @@
     const f = UW.ui.filters, d = UW.defaultFilters(), q = new URLSearchParams();
     if (UW.ui.selected) q.set("p", UW.ui.selected);
     if (UW.ui.selected && UW.ui.versions[UW.ui.selected]) q.set("v", UW.ui.versions[UW.ui.selected]);
+    if (UW.ui.mode !== "location") q.set("m", UW.ui.mode);
+    if (UW.ui.pure) q.set("pure", "1");
     if (f.minRev !== d.minRev) q.set("min", f.minRev == null ? "" : f.minRev);
     if (f.maxRev != null) q.set("max", f.maxRev);
     if (f.beds.length) q.set("beds", f.beds.join(","));
@@ -576,6 +609,8 @@
   };
   UW.readHash = function () {
     const q = new URLSearchParams(location.hash.replace(/^#/, ""));
+    UW.ui.mode = q.get("m") === "amenity" ? "amenity" : "location";
+    UW.ui.pure = q.get("pure") === "1";
     const f = UW.defaultFilters();
     UW._hashHadFilters = ["min", "max", "beds", "sleeps", "baths", "am", "loc", "area", "zone", "tier", "dq", "fav"].some((k) => q.has(k));
     const n = (k) => (q.get(k) === "" || q.get(k) == null || isNaN(+q.get(k)) ? null : +q.get(k));

@@ -122,7 +122,7 @@
     const low = o.cases.low.coc;
     const st = UW.cocStatus(low);
     const beds = d.beds != null ? F.num(d.beds) + " / " + F.num(d.baths) : p.listing ? F.num(p.listing.facts.projBeds || p.listing.facts.beds) + " / " + F.num(p.listing.facts.projBaths || p.listing.facts.baths) : "—";
-    const t = v.target, tgt = t.beds != null && (t.beds !== d.beds || t.baths !== d.baths || t.sleeps) ? '<span class="uw-fact"><b>' + F.num(t.beds) + " / " + F.num(t.baths) + (t.sleeps ? " / " + t.sleeps : "") + "</b> target</span>" : "";
+    const t = v.profile, tgt = t.beds != null ? '<span class="uw-fact"><b>' + F.num(t.beds) + " / " + F.num(t.baths) + (t.sleeps ? " / " + t.sleeps : "") + "</b> target</span>" : "";
     const nErr = UW.compErrors(v).length;
     const kind = p.kind === "new" ? '<span class="uw-tag uw-tag--new">New listing</span>' : p.kind === "promoted" ? '<span class="uw-tag uw-tag--new">Promoted · from this browser</span>' : "";
     const edited = v.edited.inputs && p.kind === "underwritten" ? '<span class="uw-tag uw-tag--edit" title="Numbers recalculated from edited inputs">Edited · recalculated</span>' :
@@ -192,8 +192,37 @@
     out.stats = statsHtml(p, v);
     out.details = detailsHtml(p, v);
     out.setupCount = inp.setup.length + " of 15 rows";
+    ["beds", "baths", "sleeps"].forEach((k) => { out["psrc-" + k] = srcLabel(v.profile.src[k]); });
     return out;
   }
+
+  // Target profile: the house as it will be run, per scenario. Every value shows where it came from.
+  const srcShort = (s) => E(String(s || "").replace(/ \$[\d,]+$/, (m) => m).slice(0, 80));
+  function profileFlagsHtml(p, v) {
+    const pr = v.profile, pid = E(p.id);
+    const row = (f) => {
+      const on = pr.flags[f] ? 1 : 0, src = pr.src.flags[f];
+      return '<div class="uw-pflag' + (src === "manual" ? " is-manual" : "") + '"><span class="uw-pflag__l">' + E(UWRules.PROFILE_LABEL[f]) + "</span>" +
+        '<span class="uw-seg uw-seg--sm uw-pflag__t" role="group" aria-label="' + E(UWRules.PROFILE_LABEL[f]) + '">' +
+        [1, 0].map((x) => '<button type="button" data-act="pflag" data-f="' + f + '" data-v="' + x + '" aria-pressed="' + (on === x) + '" data-focus="' + pid + "-pf" + f + x + '">' + x + "</button>").join("") +
+        '</span><span class="uw-pflag__s" title="' + E(src || "") + '">' + (src === "manual" ? '<span class="uw-tag uw-tag--edit">manual</span>' : srcShort(src)) + "</span></div>";
+    };
+    return '<div class="uw-pflags"><p class="uw-flabel">The sheet’s 8 amenity columns</p>' + UWRules.PROFILE_FLAGS.filter((f) => !UWRules.MATCH_ONLY.includes(f)).map(row).join("") +
+      '<p class="uw-flabel">Matching only <span class="muted">(never copied into the sheet)</span></p>' + UWRules.MATCH_ONLY.map(row).join("") + "</div>";
+  }
+  function profileHtml(p, v) {
+    const pr = v.profile, pid = E(p.id);
+    const nin = (k, lab) => '<label class="uw-pnum"><span>' + lab + '</span><input type="number" min="0" step="' + (k === "baths" ? "0.5" : "1") + '" inputmode="decimal" value="' + (pr[k] == null ? "" : pr[k]) +
+      '" data-pnum="' + k + '" aria-label="Target ' + lab.toLowerCase() + '" placeholder="—" data-focus="' + pid + "-pn" + k + '"><small data-d="psrc-' + k + '">' + srcLabel(pr.src[k]) + "</small></label>";
+    return '<section class="uw-box uw-box--profile" id="uw-profile-' + pid + '"><div class="uw-box__head"><h4>Target profile' + (p.versions.length > 1 ? " · " + E(UW.scenarioName(v)) : "") +
+      ' <span class="muted">what the house will be after the plan</span></h4>' +
+      '<button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="profile-reset"' + (v.profileEdit ? "" : " disabled") + ">Reset to sheet</button></div>" +
+      '<p class="uw-hint">As listed: <strong>' + (pr.asListed.beds == null ? "—" : F.num(pr.asListed.beds) + " / " + F.num(pr.asListed.baths)) + "</strong> bed / bath. " +
+      "Amenities are read from this scenario’s setup items (being added), the notes (already there) and the beach position (waterfront); anything not mentioned is 0. Both matching modes rerun as you edit.</p>" +
+      '<div class="uw-pnums">' + nin("beds", "Bedrooms") + nin("baths", "Baths") + nin("sleeps", "Sleeps") + "</div>" +
+      '<div data-d="pflags">' + profileFlagsHtml(p, v) + "</div></section>";
+  }
+  const srcLabel = (s) => (s === "manual" ? '<span class="uw-tag uw-tag--edit">manual</span>' : /^default/.test(s || "") ? '<span class="uw-tag uw-tag--possibly">default: edit</span> ' + E(String(s).replace(/^default: edit\s*/, "")) : E(s || "—"));
 
   function statsHtml(p, v) {
     const s = UW.compStats(p, v);
@@ -266,16 +295,11 @@
 
     const notes = '<section class="uw-box"><h4>Analyst notes</h4><textarea rows="9" data-notes="1" aria-label="Analyst notes" data-focus="' + pid + '-notes">' + E(v.notes) + "</textarea>" +
       '<p class="uw-hint">Same format as the sheet’s Analyst Notes cell. Bed / bath, lot and size are read from it.</p></section>';
-    const t = v.target;
-    const tin = (k, val, lab) => '<input type="number" min="0" step="' + (k === "baths" ? "0.5" : "1") + '" inputmode="decimal" value="' + (val == null ? "" : val) + '" data-tgt="' + k + '" aria-label="Target ' + lab + '" placeholder="—" data-focus="' + pid + "-t" + k + '">';
-    const targetCfg = '<div class="uw-tgtcfg"><p class="uw-flabel">Target configuration' + (p.versions.length > 1 ? " · " + E(UW.scenarioName(v)) : "") + "</p>" +
-      '<div class="uw-tgt"><label>Beds ' + tin("beds", t.beds, "bedrooms") + "</label><label>Baths " + tin("baths", t.baths, "bathrooms") + "</label><label>Sleeps " + tin("sleeps", t.sleeps, "sleeps") + "</label></div>" +
-      '<p class="uw-hint">The house as it will be run. Prefilled from the notes (' + E(t.from || "nothing to read") + "); “Match this property” ranks comps with these bedrooms ±1" +
-      (t.sleeps ? " and at least this many sleeps" : "") + ". Saved like your other edits.</p></div>";
-    const details = '<section class="uw-box"><h4>Property details</h4><div data-d="details">' + d.details + "</div>" + targetCfg +
+    const profile = profileHtml(p, v);
+    const details = '<section class="uw-box"><h4>Property details</h4><div data-d="details">' + d.details + "</div>" +
       '<div class="uw-form uw-form--tight"><label for="wf-' + pid + '">Waterfront type</label><select id="wf-' + pid + '" data-wf="1" data-focus="' + pid + '-wf">' +
       UW.WATERFRONT_TYPES.map((t) => '<option value="' + t + '"' + (p.waterfront === t ? " selected" : "") + ">" + (t === "Bay-canal" ? "Bay / canal" : t === "None" ? "Not on the water" : t) + "</option>").join("") + "</select></div>" +
-      '<p class="uw-hint">Can’t be read reliably from an address, so it defaults to the beach position and you can change it. It drives “Match this property”.</p>' +
+      '<p class="uw-hint">Can’t be read reliably from an address, so it defaults to the beach position and you can change it. Match by location uses it.</p>' +
       '<div class="uw-actions uw-actions--tight">' + (p.geo ? '<button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="pin">Adjust pin</button>' :
         '<button type="button" class="uw-btn uw-btn--small" data-act="pin">Place pin on the map</button><button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="osm">Look up with OpenStreetMap</button>') +
       (p.pinEdited && isUW ? '<button type="button" class="uw-linkbtn" data-act="pin-reset">Use the geocoded pin</button>' : "") + "</div></section>";
@@ -301,7 +325,7 @@
     return scen + '<div class="uw-grid uw-grid--top">' + revenue + '<section class="uw-box uw-box--ret" data-d="returns">' + d.returns + "</section></div>" +
       '<div class="uw-grid uw-grid--2"><section class="uw-box"><h4>Taxes</h4><div data-d="taxes">' + d.taxes + '</div></section><section class="uw-box"><h4>5-year</h4><div data-d="five">' + d.five + "</div></section></div>" +
       '<div class="uw-grid uw-grid--3">' + purchase + setup + opex + "</div>" +
-      '<div class="uw-grid uw-grid--2">' + notes + details + "</div>" +
+      '<div class="uw-grid uw-grid--2">' + notes + details + "</div>" + profile +
       comps + checks + amort + actions;
   }
 
@@ -332,7 +356,7 @@
         (c.candidates && c.candidates.length ? '<span class="uw-comp__ch">Same title in the workbook: ' + c.candidates.map((x) => '<a href="' + E(x.url) + '" target="_blank" rel="noopener">' + E(x.id) + "</a> (" + E(UWRules.CLASSES[x.cls].label) + ")").join(", ") + ". Not substituted.</span>" : "") +
         (c.valid && (c.bigRevenue || c.bedroomsChanged) ? '<span class="uw-comp__big">' + [c.bigRevenue && "revenue " + (c.revenueChangePct > 0 ? "+" : "") + c.revenueChangePct + "%", c.bedroomsChanged && "bedroom count changed"].filter(Boolean).join(" · ") + "</span>" : "") +
         (c.valid && c.status === "changed" ? '<button type="button" class="uw-linkbtn" data-act="comp-update" data-id="' + E(c.id) + '">Use current workbook values</button>' : "");
-      return '<tr class="uw-comp uw-comp--' + (c.valid ? c.status : "error") + (c.valid && (c.bigRevenue || c.bedroomsChanged) ? " uw-comp--big" : "") + '" data-url="' + E(c.url || "") + '" data-rev="' + (c.revenue == null ? "" : c.revenue) + '" data-adr="' + (c.adr == null ? "" : c.adr) + '" data-cls="' + c.cls + '">' +
+      return '<tr class="uw-comp uw-comp--' + (c.valid ? c.status : "error") + (c.valid && (c.bigRevenue || c.bedroomsChanged) ? " uw-comp--big" : "") + '" data-url="' + E(c.url || "") + '" data-rev="' + (c.revenue == null ? "" : c.revenue) + '" data-adr="' + (c.adr == null ? "" : c.adr) + '" data-cls="' + c.cls + '" data-match="' + (c.match || "sheet") + '"' + (UW.ui.cmatch[p.id] && UW.ui.cmatch[p.id] !== (c.match || "sheet") ? " hidden" : "") + ">" +
         '<td class="uw-comp__url">' + urlCell + "</td>" +
         '<td class="uw-comp__num">' + cellWithChange(c, "revenue", F.money(c.revenue), "money") + "</td>" +
         '<td class="uw-comp__num">' + cellWithChange(c, "bedrooms", F.num(c.bedrooms), "num") + "</td>" +
@@ -341,6 +365,7 @@
         '<td class="uw-comp__num">' + cellWithChange(c, "occupancy", occ, "pctpts") + "</td>" + flags +
         '<td class="uw-comp__notes"><textarea rows="2" data-cnote="' + i + '" aria-label="Notes for comp ' + (i + 1) + '" data-focus="' + pid + "-cn" + i + '">' + E(c.notes) + "</textarea></td>" +
         '<td class="uw-x">' + (l ? F.num(l.baths) : "—") + '</td><td class="uw-x">' + (l ? E(UW.areaById[l.area].name) : "—") + '</td><td class="uw-x">' + (l ? E(l.loc) : "—") + '</td><td class="uw-x">' + dist + "</td>" +
+        '<td class="uw-x uw-comp__match"><span class="uw-mtag uw-mtag--' + (c.match || "sheet") + '">' + ({ location: "Location", amenity: "Amenity", both: "Both" }[c.match] || "Sheet") + "</span></td>" +
         '<td class="uw-x uw-comp__st">' + status + "</td>" +
         '<td class="uw-x uw-comp__act"><button type="button" class="uw-btn uw-btn--icon" data-act="comp-del" data-id="' + E(UW.compId(c) || "") + '" data-i="' + i + '" aria-label="Remove comp ' + (i + 1) + '">×</button></td></tr>';
     }).join("");
@@ -352,14 +377,17 @@
     const noPool = /without pool|no pool/i.test(UW.scenarioName(v));
     const empty = '<div class="uw-empty-comps"><p class="uw-empty">No comps in ' + (p.versions.length > 1 ? "the " + E(UW.scenarioName(v)) + " scenario" : "this comp set") + " yet.</p>" +
       others.map((x) => '<button type="button" class="uw-btn uw-btn--small" data-act="start-from" data-from="' + E(x.label) + '">Start from the ' + E(UW.scenarioName(x)) + " comp set</button>").join("") +
-      (noPool ? '<button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="find-nopool"' + (p.geo ? "" : " disabled") + ">Find no-pool comps</button>" :
+      (noPool ? '<button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="find-nopool" title="Match by amenities: the whole island, no-pool homes ranked first">Find no-pool comps</button>' :
         '<button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="show"' + (p.geo ? "" : " disabled") + ">Find comps on the map</button>") + "</div>";
     return '<section class="uw-box uw-box--comps" id="uw-comps-' + pid + '"><div class="uw-box__head"><h4>Airbnb comp set' + (p.versions.length > 1 ? " · " + E(UW.scenarioName(v)) : "") + ' <span class="muted">' + v.comps.length + " of 15 rows · revenue high to low</span></h4>" +
       '<div class="uw-comps__tools">' + (errs.length ? '<button type="button" class="uw-btn uw-btn--small uw-btn--danger" data-act="remove-flagged">Remove flagged comps (' + errs.length + ")</button>" : "") +
+      (v.comps.length ? '<label class="uw-cmatch">Show <select data-cmatch="1" aria-label="Show comps by how they were added">' + [["", "All"], ["sheet", "Sheet"], ["location", "Location"], ["amenity", "Amenity"], ["both", "Both"]].map(([k, t]) =>
+        '<option value="' + k + '"' + ((UW.ui.cmatch[p.id] || "") === k ? " selected" : "") + ">" + t + "</option>").join("") + "</select></label>" : "") +
+      (p.geo && v.comps.some((c) => (c.match || "sheet") === "sheet" && c.valid && !/ mi from /.test(c.notes || "")) ? '<button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="append-distance" title="Adds “· 0.8 mi from ' + E(p.street) + '” to the notes of rows from the sheet">Append distance to notes</button>' : "") +
       '<button type="button" class="uw-btn uw-btn--small" data-act="show"' + (p.geo ? "" : " disabled") + ">Find comps on the map</button></div></div>" +
       (v.comps.length ? '<p class="uw-hint">' + E(compSummary(v)) + " Rows are never changed or removed automatically.</p>" +
         '<div class="table-scroll"><table class="data-table uw-comps"><thead><tr>' + HEADER.map((h) => '<th scope="col" class="uw-sheetcol">' + E(h) + "</th>").join("") +
-        '<th scope="col" class="uw-x">Baths</th><th scope="col" class="uw-x">Area</th><th scope="col" class="uw-x">Beach position</th><th scope="col" class="uw-x">Distance to target</th><th scope="col" class="uw-x">Audit</th><th scope="col" class="uw-x"><span class="uw-sr">Remove</span></th></tr></thead><tbody>' +
+        '<th scope="col" class="uw-x">Baths</th><th scope="col" class="uw-x">Area</th><th scope="col" class="uw-x">Beach position</th><th scope="col" class="uw-x">Distance to target</th><th scope="col" class="uw-x">Match</th><th scope="col" class="uw-x">Audit</th><th scope="col" class="uw-x"><span class="uw-sr">Remove</span></th></tr></thead><tbody>' +
         rows + "</tbody></table></div>" + (orderDiffers ? '<p class="uw-hint uw-order-note">Order differs on current data: sorted by the sheet’s revenue (what each row carries into the sheet); the workbook’s current revenue would order some rows differently.</p>' : "") : empty) + "</section>";
   }
   function compSummary(v) {
@@ -411,9 +439,10 @@
     else if (t.dataset.clean) inputs[t.dataset.clean === "cost" ? "cleaningCost" : "cleaningTurns"] = val(t);
     else if (t.dataset.notes) { UW.setNotes(p.id, v.label, t.value.replace(/\r\n/g, "\n")); return; }
     else if (t.dataset.cnote != null) { const comps = v.comps.map((x) => Object.assign({}, x)); comps[+t.dataset.cnote].notes = t.value; UW.setComps(p.id, v.label, comps, { quiet: true }); return; }
-    else if (t.dataset.tgt) {
-      const box = t.closest(".uw-tgt"), get = (k) => { const n = box.querySelector('[data-tgt="' + k + '"]'); return n.value === "" ? null : Number(n.value); };
-      UW.setTarget(p.id, v.label, { beds: get("beds"), baths: get("baths"), sleeps: get("sleeps") });
+    else if (t.dataset.pnum) {
+      const e = Object.assign({}, v.profileEdit || {});
+      if (t.value === "") delete e[t.dataset.pnum]; else e[t.dataset.pnum] = Number(t.value);
+      UW.setProfile(p.id, v.label, e);
       return;
     }
     else return;
@@ -424,6 +453,7 @@
     if (!c) return;
     if (t.dataset.act === "version") { UW.setVersion(c.p.id, t.value); C.renderCard(c.p.id); return; }
     if (t.dataset.wf) { UW.setPropertyField(c.p.id, "waterfront", t.value); C.renderCard(c.p.id); }
+    if (t.dataset.cmatch) { UW.ui.cmatch[c.p.id] = t.value; C.renderCard(c.p.id); }
     // Comp notes were saved as typed and feed nothing else on the card: no re-render.
   }
   function onToggle(e) {
@@ -484,7 +514,16 @@
       }
       case "remove-flagged": UW.actions.removeFlagged(p.id, v.label); break;
       case "start-from": UW.actions.startFrom(p.id, v.label, b.dataset.from); break;
-      case "find-nopool": UW.actions.findComps(p.id, v.label, { pool: -1 }); break;
+      case "find-nopool": UW.actions.findComps(p.id, v.label, "amenity", 0); break;
+      case "append-distance": UW.actions.appendDistance(p.id, v.label); break;
+      case "pflag": {
+        const e = Object.assign({}, v.profileEdit || {});
+        e.flags = Object.assign({}, e.flags || {}, { [b.dataset.f]: +b.dataset.v });
+        UW.setProfile(p.id, v.label, e);
+        C.renderCard(p.id);
+        break;
+      }
+      case "profile-reset": UW.setProfile(p.id, v.label, null); C.renderCard(p.id); UW.toast("Profile back to what the sheet says"); break;
       case "show": UW.select(p.id, { from: "card", focus: true }); document.getElementById("uw-map").scrollIntoView({ behavior: "smooth", block: "start" }); UW.panelApi.showTab("comps"); break;
       case "copy-comps": UW.actions.copyComps(p.id, v.label); break;
       case "copy-rev": UW.actions.copyRevenue(p.id, v.label); break;

@@ -24,7 +24,7 @@
     if (!host) return;
     let uw;
     try {
-      uw = await fetch("data/underwritten.json?v=20261010-uw3").then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); });
+      uw = await fetch("data/underwritten.json?v=20261011-uw4").then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); });
     } catch (e) {
       host.innerHTML = '<p class="caption">The underwriting didn’t load here. <a href="underwritten.html">Open the Underwritten Properties page</a>.</p>';
       return;

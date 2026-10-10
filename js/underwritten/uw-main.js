@@ -39,9 +39,7 @@
     UW._hashLock = true;
     UW.readHash();
     UW._hashLock = false;
-    // A link that only names a target (e.g. from the main page) ranks comps like it; a shared view keeps its own filters.
-    if (UW.ui.selected && !UW._hashHadFilters) UW.ui.filters = UW.matchFilters(UW.property(UW.ui.selected));
-    UW.matchSet = new Set(UW.listings.filter((l) => UW.matches(l)).map((l) => l.id));
+    UW.refilter();
     document.getElementById("uw-boot").remove();
 
     UW.mapApi.init();
@@ -54,8 +52,9 @@
 
     let t = null;
     const refresh = () => { clearTimeout(t); t = setTimeout(() => UW.mapApi.refresh(), 40); };
-    ["filters", "near", "comps", "places", "listings"].forEach((ev) => UW.on(ev, refresh));
+    ["filters", "near", "comps", "places", "listings", "profile"].forEach((ev) => UW.on(ev, refresh));
     UW.on("property", refresh);
+    UW.on("mode", () => { if (UW.ui.selected) setTimeout(() => UW.mapApi.focus(UW.ui.selected), 60); });
     UW.on("property", () => renderHero());
     UW.on("listings", () => renderHero());
     UW.on("select", (e) => {
@@ -66,7 +65,7 @@
     window.addEventListener("hashchange", () => {
       if (!location.hash.includes("=")) return;  // a plain section anchor (nav link), not a shared view
       UW._hashLock = true; UW.readHash(); UW._hashLock = false;
-      UW.matchSet = new Set(UW.listings.filter((l) => UW.matches(l)).map((l) => l.id));
+      UW.refilter();
       UW.panelApi.renderAll(); UW.mapApi.refresh();
       if (UW.ui.selected) UW.mapApi.focus(UW.ui.selected);
     });

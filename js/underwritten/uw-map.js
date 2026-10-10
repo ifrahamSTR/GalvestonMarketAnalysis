@@ -75,38 +75,46 @@
     if (state === "ghost") return UW.ui.layers.ghosts ? { radius: 2.4, fillColor: "#97a3ab", fillOpacity: 0.5, color: "#fff", weight: 0, opacity: 0 } : { radius: 0, fillOpacity: 0, opacity: 0, weight: 0 };
     if (state === "dim") return { radius: 3.6, fillColor: c, fillOpacity: 0.25, color: "#fff", weight: 0.5, opacity: 0.35 };
     if (state === "hl") return { radius: 7.5, fillColor: c, fillOpacity: 1, color: "#0b2f28", weight: 2.2, opacity: 1 };
+    if (state === "am") return { radius: 7.5, fillColor: c, fillOpacity: 1, color: amRing(l._amFrac), weight: 4, opacity: 1 };
     if (state === "set") return { radius: 6.5, fillColor: c, fillOpacity: 1, color: "#ecaa4a", weight: 3, opacity: 1 };
     return { radius: 5, fillColor: c, fillOpacity: 0.92, color: "#fff", weight: 1, opacity: 1 };
   }
 
+  // Amenity-mode results: a ring coloured by the share of the profile's preferred amenities the comp has.
+  const AM_RING = [[1, "#1B7A43", "all preferred amenities"], [0.75, "#5f9e8f", "most"], [0.5, "#d99132", "about half"], [0, "#8b94a3", "few, or beds / sleeps / pool off"]];
+  function amRing(frac) { return (AM_RING.find((r) => frac >= r[0]) || AM_RING[AM_RING.length - 1])[1]; }
+  M.amRing = amRing;
   M.refresh = function () {
     if (!map) return;
     const p = UW.ui.selected ? UW.property(UW.ui.selected) : null;
     const near = p ? UW.nearest(p) : [];
     M.lastNearest = near;
+    const amMode = p && UW.ui.mode === "amenity" && !UW.ui.pure;
     const hl = new Map(near.map((x) => [x.l.id, x]));
+    // Ring: how well an amenity match fits. Bedrooms, sleeps or pool off the profile -> grey, whatever its amenities.
+    near.forEach((x) => { x.l._amFrac = x.bedsTier || x.sleepsTier || x.poolOk === false ? -1 : x.info && x.info.prefTotal ? x.info.prefMatched / x.info.prefTotal : 1; });
     const inSet = new Set(p ? UW.activeVersion(p).comps.map((c) => UW.compId(c)).filter(Boolean) : []);
     const front = [];
     dots.forEach((m) => {
       const l = m.listing, match = UW.matchSet.has(l.id);
       let state = !match ? "ghost" : p ? "dim" : "match";
-      if (hl.has(l.id)) state = "hl";
+      if (hl.has(l.id)) state = amMode ? "am" : "hl";
       else if (inSet.has(l.id)) state = "set";
       m.setStyle(styleFor(l, state));
       m.options.interactive = !placing && (state !== "ghost" || inSet.has(l.id));  // while placing a pin every click places it
-      if (state === "hl" || state === "set") front.push(m);
+      if (state === "hl" || state === "am" || state === "set") front.push(m);
     });
     front.forEach((m) => m.bringToFront());
 
     badgeLayer.clearLayers();
     ringLayer.clearLayers();
-    near.forEach((x) => {
+    near.slice(0, 50).forEach((x) => {
       const b = L.marker([x.l.lat, x.l.lng], { keyboard: false, zIndexOffset: 500, title: "#" + x.rank + " " + x.l.title,
-        icon: L.divIcon({ className: "uw-rank" + (inSet.has(x.l.id) ? " uw-rank--set" : ""), iconSize: [20, 20], iconAnchor: [-3, 22], html: String(x.rank) }) });
+        icon: L.divIcon({ className: "uw-rank" + (amMode ? " uw-rank--am" : "") + (inSet.has(x.l.id) ? " uw-rank--set" : ""), iconSize: [20, 20], iconAnchor: [-3, 22], html: String(x.rank) }) });
       b.on("click", () => openListing(x.l.id));
       b.addTo(badgeLayer);
     });
-    if (p && p.geo && near.length) {
+    if (p && p.geo && near.length && !amMode) {
       const r = UW.ui.radius != null ? UW.ui.radius : near[near.length - 1].d * 1.03;
       // Same canvas as the dots: a second canvas on top would swallow their clicks.
       L.circle([p.geo.lat, p.geo.lng], { renderer, radius: r * 1609.344, color: "#0b4b40", weight: 1.2, dashArray: "4 5", fill: true, fillColor: "#0b4b40", fillOpacity: 0.035, interactive: false })
@@ -190,7 +198,8 @@
       "<tr><th>Cash on cash</th>" + ["low", "mid", "high"].map((c) => '<td class="uw-coc--' + UW.cocStatus(o.cases[c].coc) + '">' + F.pct(o.cases[c].coc) + "</td>").join("") + "</tr></tbody></table>" +
       '<div class="uw-head__badges">' + UW.targetBadges(p, v) + "</div>" +
       (p.versions.length > 1 ? UW.scenarioTable(p, true) : "") +
-      '<div class="uw-tpop__acts"><button type="button" class="uw-btn uw-btn--small uw-btn--primary" data-act="tp-rank" data-pid="' + E(p.id) + '">Rank nearest comps</button>' +
+      '<div class="uw-tpop__acts"><button type="button" class="uw-btn uw-btn--small uw-btn--primary" data-act="tp-rank" data-mode="location" data-pid="' + E(p.id) + '">Match by location</button>' +
+      '<button type="button" class="uw-btn uw-btn--small uw-btn--primary" data-act="tp-rank" data-mode="amenity" data-pid="' + E(p.id) + '">Match by amenities</button>' +
       '<button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="tp-card" data-pid="' + E(p.id) + '">Open card</button>' +
       '<button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="tp-copy" data-pid="' + E(p.id) + '"' + (v.comps.length ? "" : " disabled") + ">Copy comps</button>" +
       '<button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="tp-rev" data-pid="' + E(p.id) + '">Copy revenue cases</button>' +
@@ -231,6 +240,8 @@
       '<span class="uw-legend__i"><svg width="14" height="14" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2.8 29.2 14.2V29H2.8V14.2Z" fill="' + UW.COC_COLORS.bad + '"/></svg>below 0%</span>' +
       '<span class="uw-legend__i"><svg width="12" height="15" viewBox="0 0 32 40" aria-hidden="true"><path d="M16 38.5S28 26.4 28 16.2A12 12 0 0 0 4 16.2C4 26.4 16 38.5 16 38.5Z" fill="' + UW.COC_COLORS.none + '"/></svg>New-listing target (grey = no revenue yet)</span>' +
       '<span class="uw-legend__i"><i class="uw-legend__ring"></i>In the selected comp set</span>' +
+      (UW.ui.selected && UW.ui.mode === "amenity" && !UW.ui.pure ? '<p class="uw-legend__t">Amenity matches, best to worst · ring = how well it fits</p>' +
+        AM_RING.map((r) => '<span class="uw-legend__i"><i class="uw-legend__am" style="--r:' + r[1] + '"></i>' + r[2] + "</span>").join("") : "") +
       (UW.ui.layers.ghosts ? '<span class="uw-legend__i"><i style="background:#97a3ab;width:6px;height:6px"></i>Filtered out</span>' : "") + "</details>";
   }
 
@@ -249,9 +260,10 @@
   // ---------------------------------------------------------------------------
   M.focus = function (pid) {
     const p = UW.property(pid);
-    if (!p || !p.geo) return;
+    if (!p) return;
     const near = UW.nearest(p);
-    const pts = [[p.geo.lat, p.geo.lng]].concat(near.map((x) => [x.l.lat, x.l.lng]));
+    const pts = (p.geo ? [[p.geo.lat, p.geo.lng]] : []).concat(near.map((x) => [x.l.lat, x.l.lng]));
+    if (!pts.length) return;
     if (pts.length > 1) map.flyToBounds(L.latLngBounds(pts).pad(0.12), { maxZoom: 15.5, duration: 0.7 });
     else map.flyTo([p.geo.lat, p.geo.lng], 15, { duration: 0.7 });
   };
@@ -312,7 +324,7 @@
     }
     if (act === "pop-copy") UW.copyListings([UW.byId.get(id)], UW.ui.selected ? UW.property(UW.ui.selected) : null, "");
     if (act === "tp-ver") UW.setVersion(pid, b.dataset.v);
-    if (act === "tp-rank") { map.closePopup(); UW.actions.rank(pid); }
+    if (act === "tp-rank") { map.closePopup(); UW.actions.rank(pid, b.dataset.mode); }
     if (act === "tp-card") { map.closePopup(); UW.actions.openCard(pid); }
     if (act === "tp-copy") UW.actions.copyComps(pid);
     if (act === "tp-rev") UW.actions.copyRevenue(pid);

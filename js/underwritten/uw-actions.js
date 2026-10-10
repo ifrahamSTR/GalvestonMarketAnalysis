@@ -6,7 +6,7 @@
  * Copying or downloading a comp set that holds error rows (anything not in
  * Cleaned_Data as an entire home) asks first; the default is to leave them out.
  */
-/* global UWCsv */
+/* global UWCsv, UWRules */
 (function () {
   const UW = window.UW, E = UW.esc;
   const A = (UW.actions = {});
@@ -75,22 +75,38 @@
     }
   };
 
-  /** Add Airbnb comps to a target's comp set: Cleaned_Data entire homes only, no duplicates, 15 rows at most. */
-  A.addComps = function (pid, label, listings) {
+  /**
+   * Add Airbnb comps to a target's comp set (the one that goes into the sheet): Cleaned_Data
+   * entire homes only, 15 rows at most, notes tagged with the mode they came from and the
+   * distance to this target. A comp already added from the other mode isn't duplicated: its
+   * tag becomes [Location + Amenity match].
+   */
+  A.addComps = function (pid, label, listings, mode) {
     const { p, v } = ctx(pid, label);
-    const have = new Set(v.comps.map((c) => UW.compId(c)));
-    const add = [], skipped = { dup: 0, full: 0, invalid: 0 };
+    mode = mode || (UW.ui.pure ? "location" : UW.ui.mode);
+    let rows = v.comps.map((c) => Object.assign({}, c));
+    const n = { added: 0, both: 0, duplicate: 0, full: 0, invalid: 0 };
     listings.forEach((l) => {
-      if (!UW.canPick(l.id)) skipped.invalid++;
-      else if (have.has(l.id)) skipped.dup++;
-      else if (v.comps.length + add.length >= 15) skipped.full++;
-      else { add.push(UW.compFromListing(l, null, p)); have.add(l.id); }
+      const r = UWRules.addToSet(rows, l, { byId: UW.byId, mode, note: (x) => UW.noteFor(x, p, mode) });
+      rows = r.rows;
+      n[r.result]++;
     });
-    if (add.length) UW.setComps(p.id, v.label, v.comps.concat(add));
-    const msg = add.length ? "Added " + add.length + " comp" + (add.length === 1 ? "" : "s") + " to " + p.street + " (" + UW.scenarioName(v) + "), in revenue order" : "Nothing added";
-    const extra = [skipped.dup && skipped.dup + " already in the set", skipped.full && skipped.full + " over the sheet's 15 rows", skipped.invalid && skipped.invalid + " not a valid comp"].filter(Boolean);
-    UW.toast(msg + (extra.length ? "; " + extra.join(", ") : ""), add.length ? "" : "warn");
-    return add.length;
+    if (n.added || n.both) UW.setComps(p.id, v.label, rows);
+    const msg = n.added ? "Added " + n.added + " comp" + (n.added === 1 ? "" : "s") + " to " + p.street + " (" + UW.scenarioName(v) + "), in revenue order" : n.both ? "" : "Nothing added";
+    const extra = [n.both && n.both + " already added from the other mode, now tagged Location + Amenity", n.duplicate && n.duplicate + " already in the set",
+      n.full && n.full + " over the sheet's 15 rows", n.invalid && n.invalid + " not a valid comp"].filter(Boolean);
+    UW.toast([msg, extra.join("; ")].filter(Boolean).join("; "), n.added || n.both ? "" : "warn");
+    return n.added + n.both;
+  };
+  // "Append distance to notes": only when clicked, and only for rows that came from the sheet.
+  A.appendDistance = function (pid, label) {
+    const { p, v } = ctx(pid, label);
+    const before = v.comps.map((c) => c.notes);
+    const rows = UWRules.appendDistance(v.comps.map((c) => Object.assign({}, c, { match: c.match || "sheet" })), UW.targetPos(p), UW.byId);
+    const changed = rows.filter((r, i) => r.notes !== before[i]).length;
+    if (!changed) { UW.toast("No sheet rows to add a distance to"); return; }
+    UW.setComps(p.id, v.label, rows);
+    UW.toast("Added the distance to " + changed + " sheet row" + (changed === 1 ? "" : "s"));
   };
   A.removeComp = function (pid, label, id) {
     const { p, v } = ctx(pid, label);
@@ -114,11 +130,11 @@
     UW.setComps(p.id, toLabel, from.comps.map((c) => Object.assign({}, c)));
     UW.toast("Copied " + from.comps.length + " rows from " + UW.scenarioName(from) + "; edit them for this scenario");
   };
-  // "Find no-pool comps": Match this property with pool = Exclude, ranked around the target.
-  A.findComps = function (pid, label, am) {
+  // "Find no-pool comps": Match by amenities with pool = 0.
+  A.findComps = function (pid, label, mode, pool) {
     if (label) UW.ui.versions[pid] = label;
-    UW.select(pid, { from: "card", match: false });
-    UW.matchProperty(UW.property(pid), { am });
+    UW.select(pid, { from: "card", mode: mode || "amenity" });
+    if (pool != null) { UW.ui.amRules.pool = pool; UW.emit("near"); }
     UW.panelApi.showTab("comps");
     document.getElementById("uw-map").scrollIntoView({ behavior: "smooth", block: "start" });
   };
@@ -136,11 +152,12 @@
       row("Setup total", (v) => F.money(v.outputs.setupTotal)) + row("Total out of pocket", (v) => "<strong>" + F.money(v.outputs.oop) + "</strong>") +
       row("Revenue · low", (v) => F.k(v.inputs.revenue.low)) + row("Revenue · mid", (v) => F.k(v.inputs.revenue.mid)) + row("Revenue · high", (v) => F.k(v.inputs.revenue.high)) +
       row("Cash on cash · low", coc("low"), "uw-scen__coc") + row("Cash on cash · mid", coc("mid"), "uw-scen__coc") + row("Cash on cash · high", coc("high"), "uw-scen__coc") +
-      row("20% screen (mid ÷ price)", screen) + row("Low case vs 4%", four) + "</tbody></table></div>";
+      row("20% screen (mid ÷ price)", screen) + row("Low case vs 4%", four) +
+      row("Comp errors", (v) => { const n = UW.compErrors(v).length; return n ? '<span class="uw-badge uw-badge--err">' + n + " comp error" + (n === 1 ? "" : "s") + "</span>" : '<span class="uw-badge uw-badge--good">none</span>'; }) + "</tbody></table></div>";
   };
   A.openCard = function (pid) { UW.cardsApi.open(pid, true); };
-  A.rank = function (pid) {
-    UW.select(pid, { from: "popup" });
+  A.rank = function (pid, mode) {
+    UW.select(pid, { from: "popup", mode: mode || "location" });
     UW.panelApi.showTab("comps");
   };
 })();

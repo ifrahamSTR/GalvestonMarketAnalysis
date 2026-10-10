@@ -64,11 +64,13 @@ A second page that puts the underwriting sheets on one map with the Airbnb comps
    - recomputes every sheet from its inputs (pass/fail table);
    - diffs the amortization block of exported CSVs against their sources byte for byte;
    - checks that the browser's location rules and comp classes match the build's, for all 125 rows;
-   - covers the known audit cases, the Zillow-URL check, the comp picker (only `Cleaned_Data` entire homes), scenario labels and defaults, target bedrooms, copy-row identity and revenue order.
+   - covers the known audit cases, the Zillow-URL check, the comp picker (only `Cleaned_Data` entire homes), scenario labels and defaults, target bedrooms, copy-row identity and revenue order;
+   - checks the target profile prefill and its sources, the amenity ranking (constructed cases, and the whole island with nothing excluded), that location ranking ignores amenity edits, and comp-set tags, distance, retagging without duplicates, "Append distance to notes" and the cap of 15.
 4. Browser test: `NODE_PATH=<folder with playwright-core> node tests/test_underwritten_browser.mjs`. It uses the system Chrome and serves the folder itself. It checks:
    - that every rendered comp table has the sheet's exact 15-column header and the sheet's 0/1 amenity cells (all 12 scenarios), and is revenue-descending;
    - that every copy output is revenue-descending, and that map, popup and card copies give identical lines;
    - error badges, removing flagged comps, copy warnings and the scenario tools;
+   - the target profile (toggles, "manual", "Reset to sheet"), both matching modes with their own filters, the target popup's buttons, adding from both modes (one row, tagged Both), the Match column filter and "Append distance to notes";
    - no console errors.
 
 The script is idempotent: the same inputs give byte-identical outputs. It never edits a sheet value. Mismatches are reported, on the page and in the console.
@@ -103,11 +105,15 @@ Existing targets show the sheet's own numbers. The page recalculates only once a
   - a popup's "Copy row";
   - the nearest list or the filtered list, by tick, "Select all shown" or "Copy all shown" (top 50);
   - every path builds the row with `uw-rules.js` and `compsTSV`, so the lines are identical.
-- **Notes** are filled from workbook data, e.g. `5BR/3BA · sleeps 16 · pool + hot tub · Bay / canal · West Galveston · 0.8 mi from 6513 Golf Crest Dr`. You can edit one before copying; the edit lasts for the session.
-- **Selecting a target** applies "Match this property":
-  - its target bedrooms ±1 (from the notes' converted count, e.g. "I want 5", or the editable target configuration), plus the target's sleeps when set;
-  - the same Town / West End zone and waterfront type, unless "Same zone & water type" is off;
-  - removable chips show the active filters, and "Show pure nearest" is one click away.
+- **Notes** are filled from workbook data and tagged with how the comp was found, e.g. `[Location match] 0.8 mi from 6513 Golf Crest Dr · 5BR/3BA · sleeps 16 · pool + hot tub · Bay / canal · West Galveston` or `[Amenity match] … · 5 of 6 preferred · …`. Found by both modes: `[Location + Amenity match]`, still one row. You can edit a note before copying; the edit lasts for the session. Notes from the sheet stay as written unless you click "Append distance to notes".
+- **Target profile** (per target and scenario, in the card): as-listed bed / bath, target beds / baths / sleeps, and 10 amenity flags (the sheet's 8, plus pool heater and fire pit, which only help matching and are never copied).
+  - Prefilled from the scenario's setup items (col E), then its notes, then (waterfront only) its beach position. Each value shows its source; nothing is set without one.
+  - Sleeps, when the notes don't say, defaults to the median of `Cleaned_Data` homes with that bedroom count ("default: edit").
+  - Edits are 1 / 0 toggles marked "manual"; "Reset to sheet" undoes them. Matching reruns on every edit.
+- **Two ways to match**, switched by a toggle; each keeps its own extra filters (removable chips):
+  - **Match by location:** the same Town / West End zone and water type (both toggles, on by default), bedrooms ±1, revenue $90k+ (editable), nearest first. Amenity chips on each row are information only. "Show pure nearest" is one click away.
+  - **Match by amenities:** the whole island, ranked best to worst. Nothing is excluded; the profile only orders the list, in strict priority: bedrooms (exact first, or ±1 counts), then sleeps (within the window, then closest), then pool, then the other amenities (Must match ranks first; Prefer ranks by how many of the profile's preferred amenities a home has, earlier flags breaking ties), then revenue. Never one blended score. Each row shows the breakdown; the map rings show how well each home fits. The best 25 show first; "Show 50 more" continues down the list.
+- **Target popup** (click a house on the map): Match by location, Match by amenities, Open card, Copy comps, Copy revenue cases, Download UW CSV. Hovering shows a summary.
 
 One sheet error is reported and left as is. The amortization block's "Total Paydown" column runs $1–9 ahead of the principal actually repaid, from its month-2 row on (file 97's block is the only clean one). The sheet's Principal Pay Down reads that column; 5-year Equity uses the true figure. The page uses the true figure.
 
@@ -127,7 +133,7 @@ One sheet error is reported and left as is. The amortization block's "Total Payd
 - `underwritten.html` and `css/underwritten.css`.
 - `js/underwritten/`:
   - `uw-math.js`, `uw-csv.js` and `uw-geo.js` run in the browser and in Node.
-  - `uw-rules.js` (comp classes, auto notes, comp rows, notes parsing) also runs in both.
+  - `uw-rules.js` (comp classes, auto notes, comp rows, notes parsing, target profile, both matching modes) also runs in both.
   - `uw-app.js` (state, filters, hash), `uw-map.js` (canvas map, target popups), `uw-actions.js` (copy / download / add / remove, shared by cards, popups and the panel), `uw-panel.js`, `uw-cards.js`, `uw-add.js`, `uw-checks.js` (comp audit), `uw-main.js`.
 - `scripts/build_underwritten.py`, `tests/test_underwritten.mjs` and `tests/test_underwritten_browser.mjs`.
 - `data/version_labels.json`, `reports/comp_audit.csv`.
