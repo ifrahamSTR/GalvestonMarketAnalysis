@@ -13,8 +13,8 @@
     const n90 = UW.listings.filter((l) => l.revenue >= 90000).length;
     const tile = (v, l) => '<div class="uw-hstat"><strong>' + v + "</strong><span>" + l + "</span></div>";
     document.getElementById("uw-hero-stats").innerHTML =
-      tile(uw.length, "properties underwritten") + tile(meets + " of " + uw.length, "meet the 4% low-case cash-on-cash target") +
-      tile(screen + " of " + uw.length, "pass the 20% revenue-to-price screen (mid case)") + tile(n90, "Airbnb listings earning $90k+, of " + UW.listings.length);
+      tile(uw.length, "acquisition targets underwritten") + tile(meets + " of " + uw.length, "meet the 4% low-case cash-on-cash target") +
+      tile(screen + " of " + uw.length, "pass the 20% revenue-to-price screen (mid case)") + tile(n90, "Airbnb comps earning $90k+, of " + UW.listings.length + " entire homes");
     document.getElementById("uw-footer").innerHTML = "Underwriting from the “New Market UW’ing” Google Sheets (files " + UW.data.uw.generatedFrom.files.map((f) => f.match(/- (\d+)/)[1]).filter((x, i, a) => a.indexOf(x) === i).join(", ") +
       "). Comps from " + UW.esc(UW.data.comps.source.split(",")[0]) + ", snapshot " + UW.esc(UW.data.comps.snapshot) + ", entire homes only. Revenue figures are gross Revenue Potential; the revenue cases are the analyst’s own. " +
       'Map data &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>.';
@@ -39,6 +39,8 @@
     UW._hashLock = true;
     UW.readHash();
     UW._hashLock = false;
+    // A link that only names a target (e.g. from the main page) ranks comps like it; a shared view keeps its own filters.
+    if (UW.ui.selected && !UW._hashHadFilters) UW.ui.filters = UW.matchFilters(UW.property(UW.ui.selected));
     UW.matchSet = new Set(UW.listings.filter((l) => UW.matches(l)).map((l) => l.id));
     document.getElementById("uw-boot").remove();
 

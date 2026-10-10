@@ -25,5 +25,6 @@
 .uwx-b--warn { background: #fbf0d2; color: #8a5a10; }
 .uwx-b--bad { background: #fbe4e2; color: #b3261e; }
 .uwx-b--none { background: #eef1f3; color: #5A6B78; }
+.uwx-b--err { background: #b3261e; color: #fff; }
 .uwx-card__go { margin-left: auto; font-size: 0.78rem; font-weight: 700; color: var(--color-primary-light); }
 @media (max-width: 600px) { .uwx-head { align-items: flex-start; } .uwx-grid { grid-template-columns: 1fr; } }

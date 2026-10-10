@@ -1,7 +1,9 @@
 /**
- * Underwritten Properties map: 923 Airbnb listings drawn on one canvas
- * (L.canvas, no DOM markers), underwritten properties as house markers and
- * new listings as pins, both coloured by low-case cash on cash; the selected
+ * Underwritten Properties map: 923 Airbnb comps (Cleaned_Data entire homes)
+ * drawn on one canvas (L.canvas, no DOM markers); acquisition targets (the
+ * Zillow houses) as house markers (underwritten) and pins (new listings), both
+ * coloured by low-case cash on cash, each with a hover summary and a popup
+ * (Zillow link, numbers, scenario switch, actions); the selected
  * property's nearest comps get rank badges and a faint radius ring, and
  * everything else is dimmed. Area outlines are the main page's (convex hull,
  * 0.35 km buffer); the shoreline is the one distances are measured to.
@@ -127,21 +129,84 @@
         '<path d="m16 9 2 4.1 4.5.6-3.3 3.2.8 4.5-4-2.1-4 2.1.8-4.5-3.3-3.2 4.5-.6Z" fill="#fff"/></svg>' });
   }
 
+  // Target markers are kept (not rebuilt) so an open popup survives a redraw, e.g. a scenario switch inside it.
+  const targetMarkers = new Map();
+  function targetTip(p) {
+    const v = UW.activeVersion(p), d = v.details, F = UW.fmt;
+    const bb = d.beds != null ? F.num(d.beds) + " / " + F.num(d.baths) : p.listing ? F.num(p.listing.facts.beds) + " / " + F.num(p.listing.facts.baths) : "—";
+    const err = UW.compErrors(v).length;
+    return "<strong>" + UW.esc(p.street) + "</strong>" + (p.versions.length > 1 ? " · " + UW.esc(UW.scenarioName(v)) : "") + "<br>" + F.money(v.inputs.price) + " · " + bb + " bed / bath projected" +
+      "<br>Mid revenue " + F.k(v.inputs.revenue.mid) + " · low-case cash on cash " + F.pct(v.outputs.cases.low.coc) + (err ? '<br><span class="uw-tip__err">' + err + " comp error" + (err === 1 ? "" : "s") + "</span>" : "");
+  }
   function drawProperties(sel) {
-    propLayer.clearLayers();
+    const seen = new Set();
     UW.properties().forEach((p) => {
       if (!p.geo) return;
       const isNew = p.kind !== "underwritten";
       if ((isNew && !UW.ui.layers.newl) || (!isNew && !UW.ui.layers.uw)) return;
+      seen.add(p.id);
       const v = UW.activeVersion(p), low = v.outputs.cases.low.coc, st = UW.cocStatus(low);
       const selected = sel && sel.id === p.id;
       const icon = isNew ? pinIcon(UW.COC_COLORS[st], selected) : houseIcon(UW.COC_COLORS[st], selected, v.edited.inputs);
-      const m = L.marker([p.geo.lat, p.geo.lng], { icon, zIndexOffset: selected ? 2000 : 1000, keyboard: true, title: p.street, alt: p.street, draggable: !!(placing && placing.pid === p.id) });
-      m.bindTooltip(UW.esc(p.street) + "<br>" + (UW.isNum(low) ? "Low-case cash on cash " + UW.fmt.pct(low) : "Revenue cases not set yet"), { direction: "top", offset: [0, -24], className: "uw-tip" });
-      m.on("click", () => { UW.select(p.id, { from: "map" }); });
-      m.on("dragend", () => { const ll = m.getLatLng(); UW.setPropertyField(p.id, "pin", { lat: +ll.lat.toFixed(6), lng: +ll.lng.toFixed(6), source: "manual" }); });
-      m.addTo(propLayer);
+      let m = targetMarkers.get(p.id);
+      if (!m) {
+        m = L.marker([p.geo.lat, p.geo.lng], { icon, keyboard: true, title: p.street, alt: "Acquisition target: " + p.street, riseOnHover: true });
+        m.bindTooltip(() => targetTip(UW.property(p.id)), { direction: "top", offset: [0, -24], className: "uw-tip" });
+        m.bindPopup(() => targetPopup(UW.property(p.id)), { maxWidth: 380, minWidth: 290, className: "uw-popup uw-popup--target", autoPanPaddingTopLeft: [24, 24], autoPanPaddingBottomLeft: [24, 24] });
+        m.on("popupopen", () => m.closeTooltip());
+        m.on("dragend", () => { const ll = m.getLatLng(); UW.setPropertyField(p.id, "pin", { lat: +ll.lat.toFixed(6), lng: +ll.lng.toFixed(6), source: "manual" }); });
+        m.addTo(propLayer);
+        targetMarkers.set(p.id, m);
+      } else {
+        m.setLatLng([p.geo.lat, p.geo.lng]);
+        m.setIcon(icon);
+        if (m.isPopupOpen()) m.setPopupContent(targetPopup(p));
+      }
+      m.setZIndexOffset(selected ? 2000 : 1000);
+      const drag = !!(placing && placing.pid === p.id);
+      if (m.dragging) { if (drag) m.dragging.enable(); else m.dragging.disable(); }
     });
+    targetMarkers.forEach((m, id) => { if (!seen.has(id)) { propLayer.removeLayer(m); targetMarkers.delete(id); } });
+    drawNoPin();
+  }
+  M.openTarget = function (pid) {
+    const m = targetMarkers.get(pid);
+    if (m) { if (!map.getBounds().contains(m.getLatLng())) map.panTo(m.getLatLng()); m.openPopup(); }
+  };
+
+  function targetPopup(p) {
+    const v = UW.activeVersion(p), d = v.details, F = UW.fmt, E = UW.esc, o = v.outputs, rev = v.inputs.revenue || {}, L_ = p.listing && p.listing.facts;
+    const bb = d.beds != null ? F.num(d.beds) + " / " + F.num(d.baths) : L_ ? F.num(L_.beds) + " / " + F.num(L_.baths) : "—";
+    const tgt = v.target.beds != null && (v.target.beds !== d.beds || v.target.baths !== d.baths) ? " (target " + F.num(v.target.beds) + " / " + F.num(v.target.baths) + ")" : "";
+    const sqft = d.size != null ? Number(d.size).toLocaleString("en-US") + " sqft" : L_ && L_.sqft ? Number(L_.sqft).toLocaleString("en-US") + " sqft" : null;
+    const lot = d.lot != null ? "lot " + Number(d.lot).toLocaleString("en-US") + " sqft" : L_ && L_.lot ? "lot " + Number(L_.lot).toLocaleString("en-US") + " sqft" : null;
+    const scen = p.versions.length > 1 ? '<div class="uw-seg uw-seg--sm uw-tpop__scen" role="group" aria-label="Scenario">' + p.versions.map((x) => '<button type="button" data-act="tp-ver" data-pid="' + E(p.id) + '" data-v="' + E(x.label) + '" aria-pressed="' + (x.label === v.label) + '">' + E(UW.scenarioName(x)) + "</button>").join("") + "</div>" : "";
+    return '<div class="uw-tpop"><p class="uw-tpop__kicker">Acquisition target' + (p.kind !== "underwritten" ? " · new listing" : "") + (p.versions.length > 1 ? " · " + E(UW.scenarioName(v)) : "") + "</p>" +
+      "<h3>" + E(p.street) + "</h3>" +
+      (p.url ? '<a class="uw-btn uw-btn--primary uw-tpop__zl" href="' + E(p.url) + '" target="_blank" rel="noopener">Open on Zillow ↗</a>' : "") +
+      '<p class="uw-tpop__facts"><strong>' + F.money(v.inputs.price) + "</strong> · " + bb + " bed / bath" + tgt + [sqft, lot].filter(Boolean).map((x) => " · " + x).join("") + "</p>" + scen +
+      '<table class="uw-tpop__t"><thead><tr><th></th><th>Low</th><th>Mid</th><th>High</th></tr></thead><tbody>' +
+      "<tr><th>Revenue</th>" + ["low", "mid", "high"].map((c) => "<td>" + F.k(rev[c]) + "</td>").join("") + "</tr>" +
+      "<tr><th>Cash on cash</th>" + ["low", "mid", "high"].map((c) => '<td class="uw-coc--' + UW.cocStatus(o.cases[c].coc) + '">' + F.pct(o.cases[c].coc) + "</td>").join("") + "</tr></tbody></table>" +
+      '<div class="uw-head__badges">' + UW.targetBadges(p, v) + "</div>" +
+      (p.versions.length > 1 ? UW.scenarioTable(p, true) : "") +
+      '<div class="uw-tpop__acts"><button type="button" class="uw-btn uw-btn--small uw-btn--primary" data-act="tp-rank" data-pid="' + E(p.id) + '">Rank nearest comps</button>' +
+      '<button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="tp-card" data-pid="' + E(p.id) + '">Open card</button>' +
+      '<button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="tp-copy" data-pid="' + E(p.id) + '"' + (v.comps.length ? "" : " disabled") + ">Copy comps</button>" +
+      '<button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="tp-rev" data-pid="' + E(p.id) + '">Copy revenue cases</button>' +
+      '<button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="tp-csv" data-pid="' + E(p.id) + '">Download UW CSV</button></div></div>';
+  }
+
+  // Targets without a pin get a prompt at the top of the map (they're also listed, tagged, in the panel).
+  function drawNoPin() {
+    const host = map.getContainer();
+    let bar = document.getElementById("uw-nopin-bar");
+    const missing = UW.properties().filter((p) => !p.geo);
+    if (!missing.length || placing) { if (bar) bar.hidden = true; return; }
+    if (!bar) { bar = document.createElement("div"); bar.id = "uw-nopin-bar"; bar.className = "uw-nopin-bar"; host.appendChild(bar); L.DomEvent.disableClickPropagation(bar); L.DomEvent.disableScrollPropagation(bar); }
+    bar.hidden = false;
+    bar.innerHTML = missing.map((p) => '<span><strong>' + UW.esc(p.street) + "</strong> has no map pin" + (p.geocodeNote ? ' <span class="uw-nopin-bar__why" title="' + UW.esc(p.geocodeNote) + '">(geocoders couldn’t find the house)</span>' : "") +
+      '</span><button type="button" class="uw-btn uw-btn--small" data-act="place-target" data-pid="' + UW.esc(p.id) + '">Place this target on the map</button>').join("");
   }
 
   function drawLegend() {
@@ -153,18 +218,18 @@
     else if (by === "area") items = UW.areas.map((a) => [a.color, a.name]);
     else if (by === "loc") items = UW.data.comps.locOrder.map((l) => [UW.LOC_COLORS[l], l]);
     else items = UW.REV_BANDS.map((b) => [b[3], b[2]]);
-    const title = { revenue: "Airbnb revenue potential", tier: "Against same-size homes", area: "Area", loc: "Beach position" }[by];
+    const title = { revenue: "Airbnb comps · revenue potential", tier: "Against same-size homes", area: "Area", loc: "Beach position" }[by];
     const n = UW.matchSet.size;
     // Collapsed unless opened (state kept across redraws), so it never sits on a popup by default.
     const was = host.querySelector("details");
     const open = was ? was.open : false;
-    host.innerHTML = '<details class="uw-legend__box"' + (open ? " open" : "") + "><summary>Legend · " + n + " of " + UW.listings.length + " listings shown</summary>" +
+    host.innerHTML = '<details class="uw-legend__box"' + (open ? " open" : "") + "><summary>Legend · " + n + " of " + UW.listings.length + " Airbnb comps shown</summary>" +
       '<p class="uw-legend__t">' + title + "</p>" + items.map((i) => '<span class="uw-legend__i"><i style="background:' + i[0] + '"></i>' + UW.esc(i[1]) + "</span>").join("") +
-      '<p class="uw-legend__t">Properties · colour = low-case cash on cash</p>' +
-      '<span class="uw-legend__i"><svg width="14" height="14" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2.8 29.2 14.2V29H2.8V14.2Z" fill="' + UW.COC_COLORS.good + '"/></svg>Underwritten · 4%+</span>' +
+      '<p class="uw-legend__t">Acquisition targets · colour = low-case cash on cash</p>' +
+      '<span class="uw-legend__i"><svg width="14" height="14" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2.8 29.2 14.2V29H2.8V14.2Z" fill="' + UW.COC_COLORS.good + '"/></svg>Underwritten target · 4%+</span>' +
       '<span class="uw-legend__i"><svg width="14" height="14" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2.8 29.2 14.2V29H2.8V14.2Z" fill="' + UW.COC_COLORS.warn + '"/></svg>0–4%</span>' +
       '<span class="uw-legend__i"><svg width="14" height="14" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2.8 29.2 14.2V29H2.8V14.2Z" fill="' + UW.COC_COLORS.bad + '"/></svg>below 0%</span>' +
-      '<span class="uw-legend__i"><svg width="12" height="15" viewBox="0 0 32 40" aria-hidden="true"><path d="M16 38.5S28 26.4 28 16.2A12 12 0 0 0 4 16.2C4 26.4 16 38.5 16 38.5Z" fill="' + UW.COC_COLORS.none + '"/></svg>New listing (grey = no revenue yet)</span>' +
+      '<span class="uw-legend__i"><svg width="12" height="15" viewBox="0 0 32 40" aria-hidden="true"><path d="M16 38.5S28 26.4 28 16.2A12 12 0 0 0 4 16.2C4 26.4 16 38.5 16 38.5Z" fill="' + UW.COC_COLORS.none + '"/></svg>New-listing target (grey = no revenue yet)</span>' +
       '<span class="uw-legend__i"><i class="uw-legend__ring"></i>In the selected comp set</span>' +
       (UW.ui.layers.ghosts ? '<span class="uw-legend__i"><i style="background:#97a3ab;width:6px;height:6px"></i>Filtered out</span>' : "") + "</details>";
   }
@@ -210,11 +275,13 @@
     const row = (k, val) => "<dt>" + k + "</dt><dd>" + val + "</dd>";
     const amen = UW.ICON_ORDER.concat(["movie_theater", "golf_simulator", "gym", "outdoor_dining_area", "crib", "pack_n_play_travel_crib", "lake_access"]).filter((k) => l.flagSet.has(k));
     let btn;
-    if (!p) btn = '<p class="uw-pop__hint">Select a property to add this listing to its comp set.</p>';
+    if (!p) btn = '<p class="uw-pop__hint">Select an acquisition target to add this comp to its comp set.</p>';
     else if (inSet) btn = '<button type="button" class="uw-btn uw-btn--ghost" data-act="pop-remove" data-id="' + l.id + '">In the comp set for ' + UW.esc(p.street) + " · remove</button>";
     else if (full) btn = '<p class="uw-pop__hint">The comp set for ' + UW.esc(p.street) + " already has 15 rows (the sheet's limit).</p>";
     else btn = '<button type="button" class="uw-btn uw-btn--primary" data-act="pop-add" data-id="' + l.id + '">Add to comp set for ' + UW.esc(p.street) + "</button>";
-    return '<div class="uw-pop"><a class="uw-pop__title" href="' + UW.esc(l.url) + '" target="_blank" rel="noopener">' + UW.esc(l.title) + ' <span aria-hidden="true">↗</span></a>' +
+    btn += '<button type="button" class="uw-btn uw-btn--ghost" data-act="pop-copy" data-id="' + l.id + '">Copy row</button>' +
+      '<p class="uw-pop__hint">Copy row = the sheet’s 15 columns, note: ' + UW.esc(UW.noteFor(l, p)) + "</p>";
+    return '<div class="uw-pop"><p class="uw-pop__kicker">Airbnb comp' + (l.quality === "Possibly Good" ? ' · <span class="uw-tag uw-tag--possibly">possibly good</span>' : "") + '</p><a class="uw-pop__title" href="' + UW.esc(l.url) + '" target="_blank" rel="noopener">' + UW.esc(l.title) + ' <span aria-hidden="true">↗</span></a>' +
       '<p class="uw-pop__rev"><strong>' + UW.fmt.money(l.revenue) + '</strong> revenue potential · <span class="uw-pop__tier" style="--c:' + UW.TIER_COLORS[l.sizeTop] + '">' + UW.TIER_LABEL[l.sizeTop] + "</span></p>" +
       '<dl class="uw-pop__dl">' +
       row("Earns vs. a typical home its size", UW.fmt.x(l.vsSize) + " the " + UW.esc(l.size.replace("Studio-1BR", "studio–1BR")) + " median") +
@@ -236,12 +303,21 @@
     const b = e.target.closest("[data-act]");
     if (!b) return;
     const act = b.dataset.act, id = b.dataset.id;
+    const pid = b.dataset.pid;
     if (act === "pop-add" || act === "pop-remove") {
       const p = UW.property(UW.ui.selected), v = UW.activeVersion(p), l = UW.byId.get(id);
       if (act === "pop-add") UW.addComp(p.id, v.label, l);
-      else UW.setComps(p.id, v.label, v.comps.filter((c) => UW.compId(c) !== id));
+      else UW.actions.removeComp(p.id, v.label, id);
       map.closePopup();
     }
+    if (act === "pop-copy") UW.copyListings([UW.byId.get(id)], UW.ui.selected ? UW.property(UW.ui.selected) : null, "");
+    if (act === "tp-ver") UW.setVersion(pid, b.dataset.v);
+    if (act === "tp-rank") { map.closePopup(); UW.actions.rank(pid); }
+    if (act === "tp-card") { map.closePopup(); UW.actions.openCard(pid); }
+    if (act === "tp-copy") UW.actions.copyComps(pid);
+    if (act === "tp-rev") UW.actions.copyRevenue(pid);
+    if (act === "tp-csv") UW.actions.downloadCsv(pid);
+    if (act === "place-target") M.startPlace(pid);
     if (act === "place-cancel") cancelPlace();
   }
 
@@ -258,6 +334,7 @@
     bar.innerHTML = "<span>" + (p && p.geo ? "Drag the marker for <strong>" + UW.esc(label || p.street) + "</strong> or click the map to move it." : "Click the map where <strong>" + UW.esc(label || (p && p.street) || "the property") + "</strong> is.") +
       '</span> <button type="button" class="uw-btn uw-btn--small" data-act="place-cancel">Done</button>';
     bar.hidden = false;
+    drawNoPin();
     document.getElementById("uw-map").scrollIntoView({ behavior: "smooth", block: "start" });
     if (p && p.geo) map.flyTo([p.geo.lat, p.geo.lng], Math.max(map.getZoom(), 16), { duration: 0.6 });
     M.refresh();

@@ -9,14 +9,18 @@
  * Edits and new listings live in localStorage (wrapped in try/catch) and can be
  * exported to data/underwritten_local.json, which the build merges in for everyone.
  *
- * Existing properties show the sheet's own numbers; recalculated numbers
+ * Terminology: Zillow listings are acquisition targets (houses to buy) and are
+ * never comps; comps are only Airbnb listings from the workbook's Cleaned_Data
+ * sheet (entire homes). Every other comp-table row is an audit error.
+ *
+ * Existing targets show the sheet's own numbers; recalculated numbers
  * (UWMath.compute) appear only once a financial input is edited. Comps only
  * ever come from the workbook; revenue cases are only ever set by the user.
  */
-/* global UWMath, UWGeo, UWCsv */
+/* global UWMath, UWGeo, UWCsv, UWRules */
 (function () {
   const UW = (window.UW = {});
-  UW.VERSION = "20261010-uw2";
+  UW.VERSION = "20261010-uw3";
   const LS_KEY = "galvestonUW.v1";
 
   // ---------------------------------------------------------------------------
@@ -105,8 +109,10 @@
     UW.areas = comps.areas;
     UW.areaById = Object.fromEntries(comps.areas.map((a) => [a.id, a]));
     UWGeo.init(shoreline, UW.listings);
-    UW.templates = uw.properties.flatMap((p) => p.versions.map((v) => ({ pid: p.id, label: v.label, file: v.file, street: p.street })));
+    UW.templates = uw.properties.flatMap((p) => p.versions.map((v) => ({ pid: p.id, label: v.label, file: v.file, street: p.street, scenario: v.scenario })));
+    UW.ruleCtx = { byId: UW.byId, index: (uw.audit || {}).index || {}, badUrls: (uw.audit || {}).badUrls || {} };
     loadLocal();
+    loadSessionNotes();
   };
   UW.amortization = async function () {
     if (!UW._amort) UW._amort = await fetch("data/amortization.json?v=" + UW.VERSION).then((r) => r.json());
@@ -189,20 +195,20 @@
   // Property models
   // ---------------------------------------------------------------------------
   UW.ui = { selected: null, versions: {}, expanded: new Set(), colorBy: "revenue", n: 12, radius: null, sort: "distance",
-    layers: { areas: true, labels: true, shoreline: false, ghosts: true, uw: true, newl: true }, listSort: { key: "area", dir: 1 } };
+    layers: { areas: true, labels: true, shoreline: false, ghosts: true, uw: true, newl: true }, listSort: { key: "area", dir: 1 },
+    matchZoneWater: true, pure: false, compsView: "nearest", picked: new Set() };
+  // A scenario's display name ("With pool"), from data/version_labels.json; "File NN" otherwise.
+  UW.scenarioName = (v) => v.scenario || (v.file ? "File " + v.label : "Draft");
 
-  UW.parseNotes = function (text) {
-    const t = text || "";
-    const grab = (re) => { const m = t.match(re); return m ? m[1].trim() : null; };
-    const bb = grab(/Bed\s*\/\s*Bath\s*\(projected\)\s*:\s*([^\n]*)/i), lot = grab(/Lot Size\s*\(sqft\)\s*:\s*([^\n]*)/i), size = grab(/Prop Size\s*\(sqft\)\s*:\s*([^\n]*)/i);
-    const out = { bedBathText: bb, lotText: lot, sizeText: size, beds: null, baths: null, lot: null, size: null };
-    const m = bb && bb.match(/^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\s*(.*)$/);
-    if (m) { out.beds = +m[1]; out.baths = +m[2]; out.bedBathComment = m[3].trim() || null; }
-    [["lot", lot], ["size", size]].forEach(([k, s]) => { const n = (s || "").match(/^([\d,]+(?:\.\d+)?)\s*(.*)$/); if (n) { out[k] = +n[1].replace(/,/g, ""); out[k + "Comment"] = n[2].replace(/^[\s,]+|[\s,]+$/g, "") || null; } });
-    const why = t.includes("Why This Property?") ? t.split("Why This Property?")[1] : "";
-    out.why = why.split("\n").map((s) => s.trim()).filter((s) => s.startsWith("--")).map((s) => s.slice(2).replace(/^[\s,]+|[\s,]+$/g, "")).filter(Boolean);
-    return out;
-  };
+  UW.parseNotes = (text) => UWRules.parseNotes(text);
+
+  // Target configuration (the house as it will be run): saved edit, else the notes' converted count.
+  function targetOf(details, saved) {
+    const t = saved || {};
+    return { beds: t.beds != null ? t.beds : details.targetBeds, baths: t.baths != null ? t.baths : details.targetBaths, sleeps: t.sleeps != null ? t.sleeps : null,
+      from: saved && (saved.beds != null || saved.baths != null || saved.sleeps != null) ? "edited" : details.targetFrom };
+  }
+  const withStatus = (comps) => UWCsv.sortComps(comps).map((c) => Object.assign({}, c, UW.compStatus(c)));
 
   function placeFor(geo, notes, waterfront) {
     if (!geo) return null;
@@ -218,10 +224,12 @@
       const notes = e.notes != null ? e.notes : v.notes;
       const comps = e.comps || v.comps;
       const inputsEdited = !!e.inputs;
+      const details = UW.parseNotes(notes);
       return {
         label: v.label, file: v.file, files: v.files, number: v.number, url: v.url, preparedBy: v.preparedBy, sheet: v.sheet, layout: v.layout, checks: v.checks,
-        base: v, notes, inputs, comps: comps.map((c) => Object.assign({}, c, UW.compStatus(c))), details: UW.parseNotes(notes),
-        edited: { inputs: inputsEdited, notes: e.notes != null && e.notes !== v.notes, comps: !!e.comps },
+        scenario: v.scenario, isDefault: v.isDefault, auditSummary: v.auditSummary,
+        base: v, notes, inputs, comps: withStatus(comps), details, target: targetOf(details, e.target),
+        edited: { inputs: inputsEdited, notes: e.notes != null && e.notes !== v.notes, comps: !!e.comps, target: !!e.target },
         outputs: inputsEdited ? UWMath.compute(inputs) : UWMath.fromSheet(v.sheet), source: inputsEdited ? "recalculated" : "sheet",
       };
     });
@@ -232,7 +240,8 @@
     if (place && !place.areaName) place.areaName = (UW.areaById[place.area] || {}).name;
     return { id: base.id, kind: "underwritten", street: base.street, address: base.address, url: base.url, zip: base.zip, geo, place,
       waterfront: waterfront || (place ? place.waterfrontDefault : "None"), versions, defaultVersion: base.defaultVersion, pinEdited: !!pe.pin,
-      geoNote: base.geo ? (base.geo.approximate ? "Census geocoder matched a shortened address" : "US Census geocoder") : null };
+      geoNote: base.geo ? (base.geo.approximate ? "Census geocoder matched a shortened address" : base.geo.source === "nominatim" ? "OpenStreetMap (Nominatim)" : base.geo.source === "override" ? "data/geocode_overrides.json" : "US Census geocoder") : null,
+      geocodeNote: base.geocodeNote };
   }
 
   function buildNew(l) {
@@ -240,9 +249,10 @@
     const inputs = l.inputs;
     const place = placeFor(l.pin, notes, l.waterfront);
     if (place) place.areaName = (UW.areaById[place.area] || {}).name;
-    const v = { label: "Draft", file: null, files: [], url: l.url, sheet: null, checks: [], base: null, notes, inputs,
-      comps: (l.comps || []).map((c) => Object.assign({}, c, UW.compStatus(c))), details: UW.parseNotes(notes),
-      edited: { inputs: true, notes: false, comps: false }, outputs: UWMath.compute(inputs), source: "recalculated" };
+    const details = UW.parseNotes(notes);
+    const v = { label: "Draft", file: null, files: [], url: l.url, sheet: null, checks: [], base: null, notes, inputs, scenario: "Draft", isDefault: true,
+      comps: withStatus(l.comps || []), details, target: targetOf(details, l.target),
+      edited: { inputs: true, notes: false, comps: false, target: !!l.target }, outputs: UWMath.compute(inputs), source: "recalculated" };
     return { id: l.id, kind: l.promoted ? "promoted" : "new", street: l.street, address: l.address, url: l.url, zip: l.zip, geo: l.pin || null, place,
       waterfront: l.waterfront && l.waterfront !== "auto" ? l.waterfront : place ? place.waterfrontDefault : "None", versions: [v], defaultVersion: "Draft",
       listing: l, local: !!UW.local.listings.find((x) => x.id === l.id), geoNote: l.pin ? (l.pin.source === "manual" ? "placed by hand" : "OpenStreetMap (Nominatim)" + (l.pin.approximate ? ", street only" : "")) : null };
@@ -257,7 +267,9 @@
     const l = newListings().find((x) => x.id === pid);
     return l ? buildNew(l) : null;
   };
-  UW.activeVersion = (p) => p.versions.find((v) => v.label === (UW.ui.versions[p.id] || p.defaultVersion)) || p.versions[p.versions.length - 1];
+  // Scenarios, not "latest": the chosen one, else the default from data/version_labels.json (else the lowest file number).
+  UW.activeVersion = (p) => p.versions.find((v) => v.label === (UW.ui.versions[p.id] || p.defaultVersion)) || p.versions[0];
+  UW.compErrors = (v) => v.comps.filter((c) => !c.valid);
 
   // ---------------------------------------------------------------------------
   // Mutations
@@ -281,13 +293,21 @@
     UW.save(); UW.emit("property", pid);
   };
   UW.setComps = function (pid, label, comps, opts) {
-    const clean = comps.slice(0, 15).map((c) => ({ url: c.url, id: c.id, revenue: c.revenue, bedrooms: c.bedrooms, sleeps: c.sleeps, adr: c.adr,
+    // Stored in revenue order (sheet revenue, then ADR), so an added comp drops into its place.
+    const clean = UWCsv.sortComps(comps).slice(0, 15).map((c) => ({ url: c.url, id: c.id, revenue: c.revenue, bedrooms: c.bedrooms, sleeps: c.sleeps, adr: c.adr,
       occupancy: c.occupancy, flags: Object.assign({}, c.flags), notes: c.notes || "" }));
     if (UW.isNew(pid)) ownListing(pid).comps = clean;
     else localVer(pid, label).comps = clean;
     UW.save();
     if (opts && opts.quiet) return;  // typing in a comp's notes: no re-render
     UW.emit("property", pid); UW.emit("comps", pid);
+  };
+  UW.setTarget = function (pid, label, cfg) {
+    const clean = {};
+    ["beds", "baths", "sleeps"].forEach((k) => { if (cfg[k] != null && cfg[k] !== "" && !isNaN(cfg[k])) clean[k] = Number(cfg[k]); });
+    if (UW.isNew(pid)) ownListing(pid).target = Object.keys(clean).length ? clean : undefined;
+    else { const e = localVer(pid, label); if (Object.keys(clean).length) e.target = clean; else delete e.target; }
+    UW.save(); UW.emit("property", pid);
   };
   UW.editSource = function (pid, label) {
     const l = ((UW.local.edits[pid] || {}).versions || {})[label];
@@ -348,6 +368,7 @@
         if (e.inputs && !same(e.inputs, v.inputs)) clean.inputs = e.inputs;
         if (e.notes != null && e.notes !== v.notes) clean.notes = e.notes;
         if (e.comps) clean.comps = e.comps;
+        if (e.target) clean.target = e.target;
         if (Object.keys(clean).length) (out.versions = out.versions || {})[v.label] = clean;
       });
       if (Object.keys(out).length) edits[pid] = out;
@@ -374,41 +395,48 @@
   // ---------------------------------------------------------------------------
   // Comps against the current workbook
   // ---------------------------------------------------------------------------
-  const round2 = (v) => Math.round(v * 100) / 100;
-  UW.compId = (c) => c.id || ((String(c.url || "").match(/rooms\/(\d+)/) || [])[1] || null);
+  UW.compId = (c) => c.id || UWRules.roomId(c.url);
+  // One audit class per row (uw-rules.js); status keeps the old three-way read for display.
   UW.compStatus = function (c) {
-    const id = UW.compId(c);
-    if (!id) return { status: "unrecognised", changes: [], id: null };
-    const cur = UW.byId.get(id);
-    if (!cur) return { status: UW.otherRooms.has(id) ? "other-room" : "missing", changes: [], id };
-    const ch = [];
-    const cmp = (field, label, old, neu, tol, fmt) => { if (old == null || neu == null || Math.abs(old - neu) > tol) ch.push({ field, label, sheet: old, current: neu, fmt }); };
-    cmp("revenue", "Revenue", c.revenue, cur.revenue, 0.51, "money");
-    cmp("bedrooms", "Bedrooms", c.bedrooms, cur.bedrooms, 0.01, "num");
-    cmp("sleeps", "Sleeps", c.sleeps, cur.sleeps, 0.01, "num");
-    cmp("adr", "Nightly rate", c.adr, round2(cur.adr), 0.006, "money2");
-    // Several sheets typed occupancy to one decimal (57.9 for 57.93): within 0.05 points is the same value.
-    cmp("occupancy", "Occupancy", c.occupancy == null ? null : round2(c.occupancy * 100), round2(cur.occ * 100), 0.051, "pctpts");
-    UWCsv.SHEET_FLAGS.forEach((f) => cmp("HAS_" + f, UW.AMEN_LABEL[f], c.flags && c.flags[f] ? 1 : 0, cur.flagSet.has(f) ? 1 : 0, 0, "flag"));
-    return { status: ch.length ? "changed" : "match", changes: ch, id };
+    const a = UWRules.classify(c, UW.ruleCtx);
+    return Object.assign(a, { status: !a.valid ? "error" : a.changes.length ? "changed" : "match" });
   };
-  UW.compFromListing = function (l, notes) {
-    return { url: l.url, id: l.id, revenue: l.revenue, bedrooms: l.bedrooms, sleeps: l.sleeps, adr: round2(l.adr), occupancy: Math.round(l.occ * 10000) / 10000,
-      flags: Object.fromEntries(UWCsv.SHEET_FLAGS.map((f) => [f, l.flagSet.has(f) ? 1 : 0])), notes: notes == null ? UW.compNote(l) : notes };
-  };
-  // Factual starting note from the workbook (editable; no judgement added).
-  UW.compNote = function (l) {
-    const am = ["pool", "pool_heater", "hot_tub", "game_room", "fire_pit", "mini_golf", "pickleball", "pool_table"].filter((k) => l.flagSet.has(k))
-      .map((k) => (k === "pool_heater" ? "heated pool" : UW.AMEN_LABEL[k].toLowerCase()));
-    if (am.includes("heated pool")) am.splice(am.indexOf("pool"), 1);
-    return UW.fmt.beds(l.bedrooms) + "/" + UW.fmt.num(l.baths) + "BA" + (am.length ? " - " + am.join(" + ") : "") + "; " + l.loc + ", " + UW.areaById[l.area].name;
+  UW.canPick = (id) => UWRules.canPick(id, UW.byId);
+  // The target a note measures distance from (the selected target, or the one being added to).
+  const targetPos = (p) => (p && p.geo ? { lat: p.geo.lat, lng: p.geo.lng, street: p.street } : null);
+  UW.compNote = (l, p) => UWRules.autoNote(l, (UW.areaById[l.area] || {}).name, targetPos(p));
+  UW.compFromListing = function (l, notes, p) {
+    if (!UW.canPick(l.id)) throw new Error("Only Cleaned_Data entire homes can be comps");
+    return UWRules.rowFromListing(l, notes == null ? UW.noteFor(l, p) : notes);
   };
 
+  // Notes edited in the map lists before copying: kept for this browser session only.
+  const SN_KEY = "galvestonUW.sessionNotes";
+  let sessionNotes = {};
+  function loadSessionNotes() { try { sessionNotes = JSON.parse(sessionStorage.getItem(SN_KEY) || "{}") || {}; } catch (e) { sessionNotes = {}; } }
+  const noteKey = (l, p) => l.id + "|" + (p ? p.id : "-");
+  UW.noteFor = (l, p) => (sessionNotes[noteKey(l, p)] != null ? sessionNotes[noteKey(l, p)] : UW.compNote(l, p));
+  UW.setSessionNote = function (l, p, text) {
+    const k = noteKey(l, p);
+    if (text == null || text === UW.compNote(l, p)) delete sessionNotes[k]; else sessionNotes[k] = text;
+    try { sessionStorage.setItem(SN_KEY, JSON.stringify(sessionNotes)); } catch (e) { /* session storage blocked: kept in memory */ }
+  };
+  UW.noteEdited = (l, p) => sessionNotes[noteKey(l, p)] != null;
+
+  /** Copy Airbnb comps as sheet rows (15 columns, tab-separated, no header), always revenue high -> low. */
+  UW.copyListings = function (ls, p, what) {
+    const rows = ls.filter((l) => UW.canPick(l.id)).map((l) => UWRules.rowFromListing(l, UW.noteFor(l, p)));
+    if (!rows.length) { UW.toast("Nothing selected to copy", "warn"); return Promise.resolve(false); }
+    return UW.copy(UWCsv.compsTSV(rows), rows.length + " comp row" + (rows.length === 1 ? "" : "s") + (what ? " " + what : "") + ", revenue high to low");
+  };
+
+  // Stats leave error rows out (they aren't valid comps); "excluded" says how many.
   UW.compStats = function (p, v) {
-    const revs = v.comps.map((c) => c.revenue).filter(isNum).sort((a, b) => a - b);
+    const ok = v.comps.filter((c) => c.valid);
+    const revs = ok.map((c) => c.revenue).filter(isNum).sort((a, b) => a - b);
     const q = (p_) => { if (!revs.length) return null; const h = (revs.length - 1) * p_, lo = Math.floor(h); return revs[lo] + (revs[Math.min(lo + 1, revs.length - 1)] - revs[lo]) * (h - lo); };
-    const known = v.comps.map((c) => UW.byId.get(UW.compId(c))).filter(Boolean);
-    return { n: v.comps.length, p25: q(0.25), median: q(0.5), p75: q(0.75), max: revs.length ? revs[revs.length - 1] : null, min: revs.length ? revs[0] : null, known: known.length,
+    const known = ok.map((c) => UW.byId.get(UW.compId(c))).filter(Boolean);
+    return { n: ok.length, excluded: v.comps.length - ok.length, total: v.comps.length, p25: q(0.25), median: q(0.5), p75: q(0.75), max: revs.length ? revs[revs.length - 1] : null, min: revs.length ? revs[0] : null, known: known.length,
       sameArea: p.place ? known.filter((l) => l.area === p.place.area).length : null, sameLoc: p.place ? known.filter((l) => l.loc === p.place.loc).length : null };
   };
 
@@ -441,14 +469,36 @@
   };
   UW.setFilters = function (patch) { Object.assign(UW.ui.filters, patch); UW.applyFilters(); };
   UW.resetFilters = function () { UW.ui.filters = UW.defaultFilters(); UW.applyFilters(); };
-  UW.matchProperty = function (p) {
-    const v = UW.activeVersion(p);
-    const b = v.details.beds != null ? v.details.beds : p.listing && p.listing.facts ? p.listing.facts.projBeds || p.listing.facts.beds : null;
+  /**
+   * "Match this property": the target configuration's bedrooms +/- 1 (and sleeps
+   * at least the target's, when set), plus the same Town / West End zone and
+   * waterfront type unless "Same zone & water type" is off. opts.am adds
+   * amenity rules (e.g. {pool: -1} for a no-pool scenario).
+   */
+  UW.matchFilters = function (p, opts) {
+    opts = opts || {};
+    const v = UW.activeVersion(p), t = v.target;
     const f = UW.defaultFilters();
+    const b = t.beds != null ? t.beds : p.listing && p.listing.facts ? p.listing.facts.projBeds || p.listing.facts.beds : null;
     if (b != null) f.beds = [b - 1, b, b + 1].filter((x) => x >= 1).map(UW.bedBucket).filter((x, i, a) => a.indexOf(x) === i);
-    if (p.place) f.zone = p.place.zone;
-    f.loc = (UW.WATERFRONT_LOC[p.waterfront] || []).slice();
-    UW.ui.filters = f;
+    if (t.sleeps != null) f.minSleeps = t.sleeps;
+    if (UW.ui.matchZoneWater) {
+      if (p.place) f.zone = p.place.zone;
+      f.loc = (UW.WATERFRONT_LOC[p.waterfront] || []).slice();
+    }
+    if (opts.am) f.am = Object.assign({}, opts.am);
+    return f;
+  };
+  UW.matchProperty = function (p, opts) {
+    UW.ui.filters = UW.matchFilters(p, opts);
+    UW.ui.pure = false;
+    UW.applyFilters();
+  };
+  // Plain straight-line nearest: only the revenue threshold.
+  UW.pureNearest = function () {
+    const keep = UW.ui.filters.minRev;
+    UW.ui.filters = Object.assign(UW.defaultFilters(), { minRev: keep });
+    UW.ui.pure = true;
     UW.applyFilters();
   };
   UW.countActiveFilters = function () {
@@ -479,16 +529,21 @@
   };
 
   UW.select = function (pid, opts) {
+    opts = opts || {};
+    const changed = pid !== UW.ui.selected;
     UW.ui.selected = pid;
     if (pid) {
       const p = UW.property(pid);
       if (!p) UW.ui.selected = null;
+      // Picking a target ranks comps like it: "Match this property" is applied (its filters show as removable chips).
+      else if (changed && opts.match !== false) { UW.ui.filters = UW.matchFilters(p); UW.ui.pure = false; UW.matchSet = new Set(UW.listings.filter((l) => UW.matches(l)).map((l) => l.id)); UW.emit("filters"); }
     }
     UW.writeHash();
     UW.emit("select", Object.assign({ pid: UW.ui.selected }, opts || {}));
   };
   UW.setVersion = function (pid, label) {
     UW.ui.versions[pid] = label;
+    if (UW.ui.selected === pid) { UW.ui.filters = UW.matchFilters(UW.property(pid)); UW.matchSet = new Set(UW.listings.filter((l) => UW.matches(l)).map((l) => l.id)); UW.emit("filters"); }
     UW.writeHash();
     UW.emit("property", pid); UW.emit("comps", pid); UW.emit("places");
   };
@@ -522,6 +577,7 @@
   UW.readHash = function () {
     const q = new URLSearchParams(location.hash.replace(/^#/, ""));
     const f = UW.defaultFilters();
+    UW._hashHadFilters = ["min", "max", "beds", "sleeps", "baths", "am", "loc", "area", "zone", "tier", "dq", "fav"].some((k) => q.has(k));
     const n = (k) => (q.get(k) === "" || q.get(k) == null || isNaN(+q.get(k)) ? null : +q.get(k));
     if (q.has("min")) f.minRev = n("min");
     if (q.has("max")) f.maxRev = n("max");

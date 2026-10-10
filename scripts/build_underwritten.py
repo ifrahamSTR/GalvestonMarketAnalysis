@@ -5,7 +5,13 @@ Build the data behind underwritten.html (Underwritten Properties):
   the Gulf shoreline the notebooks use (mc.gulf_shoreline())     -> data/shoreline.json
   underwriting/source_csv/*.csv  (+ data/underwritten_local.json) -> data/underwritten.json
                                                                     data/amortization.json
-  US Census geocoder, cached in data/geocode_cache.json, with manual lat/lng in data/geocode_overrides.json
+  US Census geocoder, then Nominatim, cached in data/geocode_cache.json; manual pins in data/geocode_overrides.json
+  scenario labels for multi-file targets                          <- data/version_labels.json
+  comp audit of every sheet's comp rows against the workbook(s)   -> reports/comp_audit.csv (+ in underwritten.json)
+
+Terminology: Zillow listings are acquisition targets (the houses to buy) and are
+never comps. Comps are only Airbnb listings from the workbook's Cleaned_Data
+sheet (entire homes); every other row in a comp table is an audit error.
 
 Run from anywhere (same Python env as generate_webpage_data.py):
     python scripts/build_underwritten.py            # geocodes addresses not yet cached
@@ -478,6 +484,32 @@ def census(addr):
     return cache[addr]
 
 
+UA = "STRSearch-GalvestonUnderwriting/1.0 (+https://ifrahamstr.github.io/GalvestonMarketAnalysis/underwritten.html)"
+
+
+def nominatim(q):
+    """OpenStreetMap Nominatim, within its policy: one request a second, identified, cached (hits and misses)."""
+    key = "nominatim:" + q
+    if key in cache:
+        return cache[key]
+    if OFFLINE:
+        return None
+    time.sleep(1.1)
+    qs = urllib.parse.urlencode({"q": q, "format": "jsonv2", "limit": "1", "countrycodes": "us", "addressdetails": "1"})
+    try:
+        req = urllib.request.Request("https://nominatim.openstreetmap.org/search?" + qs, headers={"User-Agent": UA, "Accept-Language": "en"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            js = json.load(resp)
+    except Exception as e:  # noqa: BLE001
+        print(f"  nominatim error for {q!r}: {e}")
+        return None
+    h = js[0] if js else None
+    cache[key] = {"found": bool(h)} if not h else {
+        "found": True, "lat": round(float(h["lat"]), 6), "lng": round(float(h["lon"]), 6), "matched": h.get("display_name"),
+        "houseLevel": bool((h.get("address") or {}).get("house_number")), "type": h.get("addresstype") or h.get("type")}
+    return cache[key]
+
+
 def geocode(a):
     if a["zpid"] in overrides:
         o = overrides[a["zpid"]]
@@ -491,24 +523,178 @@ def geocode(a):
         if hit:
             return {"lat": hit["lat"], "lng": hit["lng"], "source": "census", "query": q, "matched": hit["matched"],
                     "approximate": i > 0, "nMatches": hit.get("nMatches", 1)}
+    # Census found nothing: try Nominatim. Only a house-level match is used; a street centroid can't place a house.
+    n = nominatim(a["address"])
+    a["nominatim"] = n
+    if n and n.get("found") and n.get("houseLevel"):
+        return {"lat": n["lat"], "lng": n["lng"], "source": "nominatim", "query": a["address"], "matched": n["matched"], "approximate": False}
     return None
 
 
 # ---------------------------------------------------------------------------
-# Read, group and validate
+# 4. Comp audit sources: the market workbook (source of truth) and any other
+#    Galveston*.xlsx beside it or in ../archive (reported, never used as truth)
+# ---------------------------------------------------------------------------
+ROOM_RE = re.compile(r"airbnb\.[a-z.]+/rooms/(?:plus/)?(\d+)", re.I)
+TITLE_COLS = ["TITLE", "title", "name", "Listing Name"]
+CLASS_LABEL = {"usable": "Usable", "possibly": "Usable, possibly good", "excluded": "Excluded for data quality", "never": "Never scored",
+               "room": "Not an entire home", "removed": "In Removed_Listings", "missing": "Not in any workbook",
+               "badurl": "Not a valid Airbnb URL", "zillow": "Zillow URL in a comp table"}
+CLASS_SHORT = {"excluded": "Not Good Data", "never": "never scored", "room": "not an entire home", "removed": "in Removed_Listings",
+               "missing": "not in any workbook", "badurl": "not a valid URL", "zillow": "Zillow URL"}
+VALID = {"usable", "possibly"}
+CLASS_ORDER = ["zillow", "badurl", "missing", "removed", "room", "excluded", "never", "possibly", "usable"]
+
+
+def rooms(series):
+    return series.astype(str).str.replace("abnb_", "", regex=False).str.extract(r"(\d+)")[0]
+
+
+def norm_title(t):
+    t = re.sub(r"\s+-\s+[^-]*\bfor Rent in\b.*$", "", str(t or ""), flags=re.I)  # Airbnb page title -> listing title
+    t = re.sub(r"\s+-\s+Airbnb\s*$", "", t, flags=re.I)
+    return re.sub(r"\s+", " ", t.replace("’", "'")).strip().lower()
+
+
+def load_workbook(path):
+    x = pd.ExcelFile(path, engine="openpyxl")
+    cd = pd.read_excel(x, "Cleaned_Data")
+    cd = cd[cd["Property ID"].notna()].copy()
+    cd["room"] = rooms(cd["Property ID"])
+    bt = pd.read_excel(x, "Base_Table", usecols=lambda c: c in ["Property ID", "Data Quality Category", "Quality Rating Reason", "roomType"] + TITLE_COLS)
+    bt = bt[bt["Property ID"].notna()].copy()
+    bt["room"] = rooms(bt["Property ID"])
+    rl = pd.read_excel(x, "Removed_Listings") if "Removed_Listings" in x.sheet_names else pd.DataFrame()
+    removed = set(rooms(rl.loc[rl["Property ID"].notna(), "Property ID"])) if "Property ID" in rl else set()
+    snap = pd.to_datetime(cd["data_date"], errors="coerce", utc=True).max() if "data_date" in cd else pd.NaT
+    rt = dict(zip(bt["room"], bt["roomType"]))
+    titles = {}
+    for _, row in bt.iterrows():
+        for c in TITLE_COLS:
+            if c in bt and pd.notna(row.get(c)):
+                titles.setdefault(norm_title(row[c]), set()).add(row["room"])
+    for rid, t in zip(cd["room"], cd["Listing_Title"]):
+        titles.setdefault(norm_title(t), set()).add(rid)
+    clean = {r["room"]: {"dq": r["Data Quality Category"] if pd.notna(r["Data Quality Category"]) else None, "roomType": rt.get(r["room"]),
+                         "title": str(r["Listing_Title"])} for _, r in cd.iterrows()}
+    base = {r["room"]: {"dq": r["Data Quality Category"] if pd.notna(r["Data Quality Category"]) else None,
+                        "reason": r["Quality Rating Reason"] if pd.notna(r["Quality Rating Reason"]) else None,
+                        "roomType": r["roomType"] if pd.notna(r["roomType"]) else None,
+                        "title": next((str(r[c]) for c in TITLE_COLS if c in bt and pd.notna(r.get(c))), None)} for _, r in bt.iterrows()}
+    return {"file": str(path.relative_to(mc.XLSX.parent)), "snapshot": None if pd.isna(snap) else snap.strftime("%Y-%m-%d"),
+            "clean": clean, "base": base, "removed": removed, "titles": titles,
+            "counts": {"Cleaned_Data": len(cd), "Base_Table": len(bt), "Removed_Listings": len(removed)}}
+
+
+wb_paths = [mc.XLSX] + sorted(p for p in mc.XLSX.parent.glob("Galveston*.xlsx") if p != mc.XLSX) + sorted((mc.XLSX.parent / "archive").glob("Galveston*.xlsx"))
+WBS = [load_workbook(p) for p in wb_paths]
+MAIN = WBS[0]
+
+
+def plain_reason(r):
+    """'Missing Months is Bad Data: 6 (threshold: 5); Avg Reviews Per Month is Bad Data: 0.89 ...' -> plain words."""
+    out = []
+    for seg in str(r or "").split(";"):
+        m = re.match(r"\s*(Total Months|Missing Months|Avg Reviews Per Month|High Season Reviews) is Bad Data: ([\d.]+)(?: \(threshold: ([\d.]+)\))?", seg)
+        if not m:
+            continue
+        k, v, t = m.group(1), float(m.group(2)), m.group(3)
+        out.append({"Total Months": f"only {v:g} months of history (needs {t})", "Missing Months": f"{v:g} missing months (allowed {t})",
+                    "Avg Reviews Per Month": f"low review rate ({v:g} a month; needs {t})",
+                    "High Season Reviews": f"few high-season reviews ({v:g}; needs {t})"}[k])
+    return ", ".join(out) if out else str(r or "")
+
+
+def appears_in(rid):
+    out = []
+    for w in WBS:
+        sheets = [s for s, hit in (("Cleaned_Data", rid in w["clean"]), ("Base_Table", rid in w["base"]), ("Removed_Listings", rid in w["removed"])) if hit]
+        if sheets:
+            out.append(f"{w['file']} ({w['snapshot']}): {', '.join(sheets)}")
+    return out
+
+
+def wb_title(rid):
+    for w in WBS:
+        for src in ("clean", "base"):
+            if rid in w[src] and w[src][rid].get("title"):
+                return w[src][rid]["title"]
+    return None
+
+
+def title_candidates(text):
+    t = norm_title(text)
+    if not t:
+        return []
+    out = []
+    for w in WBS:
+        for rid in sorted(w["titles"].get(t, ())):
+            if not any(c["id"] == rid for c in out):
+                out.append({"id": rid, "url": f"https://www.airbnb.com/rooms/{rid}", "file": w["file"], "title": wb_title(rid)})
+    for c in out:
+        c["cls"] = classify(c["url"])["cls"]
+    return out
+
+
+def classify(url):
+    """Exactly one audit class for a comp-table URL cell (see CLASS_LABEL)."""
+    u = str(url or "").strip()
+    if re.search(r"(^|[/.@])zillow\.com", u, re.I):
+        return {"cls": "zillow", "id": None, "reason": "A Zillow listing is an acquisition target, never a comp"}
+    m = ROOM_RE.search(u)
+    if not m:
+        return {"cls": "badurl", "id": None, "reason": ("The cell holds a listing title, not an airbnb.com/rooms/ link" if u else "The cell is empty"),
+                "candidates": title_candidates(u)}
+    rid = m.group(1)
+    if rid in MAIN["clean"]:
+        c = MAIN["clean"][rid]
+        if c["roomType"] != "Entire home/apt":
+            return {"cls": "room", "id": rid, "reason": f"{c['roomType'] or 'Not an entire home'} (in Cleaned_Data, but comps are entire homes)"}
+        return {"cls": "usable" if c["dq"] == "Good Data" else "possibly", "id": rid, "reason": c["dq"]}
+    if rid in MAIN["removed"]:
+        return {"cls": "removed", "id": rid, "reason": "Listed in Removed_Listings"}
+    if rid in MAIN["base"]:
+        b = MAIN["base"][rid]
+        if b["roomType"] and b["roomType"] != "Entire home/apt":
+            return {"cls": "room", "id": rid, "reason": f"{b['roomType']} (Base_Table)"}
+        if b["dq"] == "Not Good Data":
+            return {"cls": "excluded", "id": rid, "reason": plain_reason(b["reason"])}
+        if not b["dq"]:
+            return {"cls": "never", "id": rid, "reason": "In Base_Table with no Data Quality Category, so it never reached Cleaned_Data"}
+        return {"cls": "missing", "id": rid, "reason": f"Scored {b['dq']} in Base_Table but not in Cleaned_Data"}
+    seen = appears_in(rid)
+    return {"cls": "missing", "id": rid, "reason": "Not in any workbook scanned" if not seen else "Not in the current workbook; only in " + "; ".join(seen)}
+
+
+# Self-checks on the classifier (cheap; run every build).
+assert classify("https://www.zillow.com/homedetails/6513-Golf-Crest-Dr-Galveston-TX-77551/27662294_zpid/")["cls"] == "zillow"
+assert classify("Family fun, pool - Houses for Rent in Jamaica Beach, Texas, United States - Airbnb")["cls"] == "badurl"
+assert classify("https://www.airbnb.com/rooms/" + listings[0]["id"])["cls"] in VALID
+
+# ---------------------------------------------------------------------------
+# 5. Read the sheets, group into targets / scenarios, audit the comps
 # ---------------------------------------------------------------------------
 LIST = {x["id"]: x for x in listings}
-OTHER = set(other["room"].dropna())
-validation = {"missingComps": [], "changedComps": [], "duplicateProperties": [], "duplicateFiles": [], "mortgageYears": [],
-              "debtService": [], "sheetTotals": [], "geocode": [], "parse": [], "committed": []}
+validation = {"duplicateProperties": [], "duplicateFiles": [], "mortgageYears": [], "debtService": [], "sheetTotals": [],
+              "geocode": [], "parse": [], "committed": []}
+
+VL_P = DATA / "version_labels.json"
+if not VL_P.exists():
+    dump(VL_P, {"_readme": "Scenario names for targets underwritten in more than one file, keyed by file number. "
+                           "A value is a name, or {\"label\": name, \"default\": true} to open that scenario first. "
+                           "Otherwise the lowest file number opens first; unnamed files show as 'File NN'.",
+                "96": "With pool", "97": "Without pool"})
+VLABELS = {k: v for k, v in json.loads(VL_P.read_text()).items() if not k.startswith("_")}
 
 
-def comp_status(c):
-    if not c["id"]:
-        return {"status": "unrecognised", "changes": []}
-    cur = LIST.get(c["id"])
-    if cur is None:
-        return {"status": "other-room" if c["id"] in OTHER else "missing", "changes": []}
+def scenario_of(number):
+    e = VLABELS.get(str(number))
+    if isinstance(e, dict):
+        return e.get("label") or f"File {number}", bool(e.get("default"))
+    return (e or f"File {number}"), False
+
+
+def value_changes(c, cur):
     ch = []
 
     def cmp(field, old, new, tol):
@@ -522,8 +708,32 @@ def comp_status(c):
     # Several sheets typed occupancy to one decimal (57.9 for 57.93): within 0.05 points is the same value.
     cmp("occupancy", None if c["occupancy"] is None else round(c["occupancy"] * 100, 2), round(cur["occ"] * 100, 2), 0.051)
     for f in SHEET_FLAGS:
-        cmp("HAS_" + f, c["flags"][f], int(f in cur["flags"]), 0)
-    return {"status": "changed" if ch else "match", "changes": ch}
+        cmp("HAS_" + f, (c.get("flags") or {}).get(f, 0), int(f in cur["flags"]), 0)
+    return ch
+
+
+AUDIT_INDEX, BAD_URLS = {}, {}
+
+
+def audit_comp(c):
+    """Class + reason + value changes for one comp row; also fills the browser's lookup tables."""
+    k = classify(c.get("url"))
+    out = {"cls": k["cls"], "label": CLASS_LABEL[k["cls"]], "valid": k["cls"] in VALID, "reason": k["reason"], "id": k["id"],
+           "changes": [], "bigRevenue": False, "bedroomsChanged": False, "revenueChangePct": None, "currentRevenue": None, "currentBedrooms": None}
+    if k["id"]:
+        AUDIT_INDEX.setdefault(k["id"], {"cls": k["cls"], "reason": k["reason"], "title": wb_title(k["id"]), "appearsIn": appears_in(k["id"])})
+    if k["cls"] == "badurl":
+        out["candidates"] = k.get("candidates", [])
+        BAD_URLS.setdefault(str(c.get("url") or "").strip(), {"reason": k["reason"], "candidates": out["candidates"]})
+    if out["valid"]:
+        cur = LIST[k["id"]]
+        out["changes"] = value_changes(c, cur)
+        out["currentRevenue"], out["currentBedrooms"] = cur["revenue"], cur["bedrooms"]
+        if c.get("revenue"):
+            out["revenueChangePct"] = round((cur["revenue"] - c["revenue"]) / c["revenue"] * 100, 1)
+            out["bigRevenue"] = abs(cur["revenue"] - c["revenue"]) / c["revenue"] > 0.15
+        out["bedroomsChanged"] = c.get("bedrooms") is not None and abs(cur["bedrooms"] - c["bedrooms"]) > 0.01
+    return out
 
 
 files = sorted(SRC.glob("*.csv"), key=lambda p: (int(re.search(r"- (\d+)", p.name).group(1)), p.name))
@@ -536,7 +746,7 @@ for p in files:
         validation["parse"].append({"file": p.name, "issue": iss})
     groups.setdefault(zkey(s["url"]), []).append(s)
 
-properties, amort_out = [], {}
+properties, amort_out, audit_rows = [], {}, []
 for key, sheets in groups.items():
     # Byte-identical files collapse into one version.
     seen, versions = {}, []
@@ -551,17 +761,23 @@ for key, sheets in groups.items():
     nums = [v["number"] for v in versions]
     for v in versions:
         v["label"] = str(v["number"]) if nums.count(v["number"]) == 1 else f"{v['number']} ({v['copy'] or 1})"
+        v["scenario"], v["isDefault"] = scenario_of(v["number"])
     versions.sort(key=lambda v: (v["number"], v["copy"] or 0))
-    default = versions[-1]
+    # Scenarios, not "latest": the one marked default in version_labels.json, else the lowest file number.
+    default = next((v for v in versions if v["isDefault"]), versions[0])
     a = address_from_url(default["url"])
     geo = geocode(a)
+    files_of = [f for v in versions for f in v["files"]]
     if geo is None:
-        validation["geocode"].append({"address": a["address"], "zpid": a["zpid"], "files": [f for v in versions for f in v["files"]],
-                                      "issue": "Census geocoder found no match; add a pin in data/geocode_overrides.json"})
+        n = a.get("nominatim")
+        osm = ("Nominatim found nothing" if n and not n.get("found") else
+               f"Nominatim found only {n.get('type') or 'an area'}-level match ({n.get('matched')}), not the house" if n else "Nominatim not tried (offline)")
+        validation["geocode"].append({"address": a["address"], "zpid": a["zpid"], "files": files_of, "nominatim": n,
+                                      "issue": "Census geocoder found no match; " + osm + ". Place it on the map, then Export pins to data/geocode_overrides.json"})
         loc = None
     else:
         if geo.get("approximate"):
-            validation["geocode"].append({"address": a["address"], "zpid": a["zpid"], "files": [f for v in versions for f in v["files"]],
+            validation["geocode"].append({"address": a["address"], "zpid": a["zpid"], "files": files_of,
                                           "issue": f"matched only as '{geo['query']}' -> {geo['matched']}; check the pin"})
         loc = place(geo["lat"], geo["lng"], default["notes"])
     out_versions = []
@@ -569,13 +785,14 @@ for key, sheets in groups.items():
         det = parse_notes(v["notes"])
         comps = []
         for c in v["comps"]:
-            st = comp_status(c)
-            comps.append({**c, **st})
-            if st["status"] in ("missing", "other-room", "unrecognised"):
-                validation["missingComps"].append({"file": v["label"], "address": a["street"], "row": c["row"], "id": c["id"], "url": c["url"],
-                                                   "status": st["status"], "revenue": c["revenue"], "bedrooms": c["bedrooms"]})
-            elif st["status"] == "changed":
-                validation["changedComps"].append({"file": v["label"], "address": a["street"], "row": c["row"], "id": c["id"], "changes": st["changes"]})
+            au = audit_comp(c)
+            comps.append({**c, "audit": au})
+            audit_rows.append({"targetId": a["zpid"], "target": a["street"], "file": v["label"], "scenario": v["scenario"], "row": c["row"],
+                               "url": c["url"], "id": au["id"], "title": wb_title(au["id"]) if au["id"] else None, "cls": au["cls"], "label": au["label"],
+                               "valid": au["valid"], "reason": au["reason"], "sheetRevenue": c["revenue"], "currentRevenue": au["currentRevenue"],
+                               "revenueChangePct": au["revenueChangePct"], "bigRevenue": au["bigRevenue"], "sheetBedrooms": c["bedrooms"],
+                               "currentBedrooms": au["currentBedrooms"], "bedroomsChanged": au["bedroomsChanged"], "changes": au["changes"],
+                               "appearsIn": AUDIT_INDEX.get(au["id"], {}).get("appearsIn", []) if au["id"] else [], "candidates": au.get("candidates", [])})
         ids = [c["id"] for c in v["comps"] if c["id"]]
         dup_ids = sorted({i for i in ids if ids.count(i) > 1})
         checks = []
@@ -636,14 +853,16 @@ for key, sheets in groups.items():
             checks.append({"kind": "parse", "text": iss})
         amort_out[v["file"]] = v["block"]
         out_versions.append({
-            "label": v["label"], "number": v["number"], "file": v["file"], "files": v["files"], "md5": v["md5"],
+            "label": v["label"], "number": v["number"], "scenario": v["scenario"], "isDefault": v is default,
+            "file": v["file"], "files": v["files"], "md5": v["md5"],
             "notes": v["notes"], "preparedBy": v["preparedBy"], "url": v["url"], "details": det,
             "inputs": inp, "sheet": sh, "comps": comps, "layout": v["layout"], "checks": checks, "extras": v["extras"],
             "amortRows": [v["block"]["startRow"], v["block"]["endRow"]],
         })
     properties.append({"id": a["zpid"] or hashlib.md5(key.encode()).hexdigest()[:10], "key": key, "kind": "underwritten",
                        "url": default["url"].split("?")[0], "address": a["address"], "street": a["street"], "city": a["city"],
-                       "zip": a["zip"], "geo": geo, "place": loc, "versions": out_versions, "defaultVersion": default["label"]})
+                       "zip": a["zip"], "geo": geo, "place": loc, "versions": out_versions, "defaultVersion": default["label"],
+                       "geocodeNote": None if geo else validation["geocode"][-1]["issue"]})
 
 # Possible duplicates: identical projected bed/bath, lot and size under different addresses.
 seen = {}
@@ -671,6 +890,7 @@ for p in properties:
 # Order: Town -> West End along the island, as the main page orders its areas.
 order = {a: i for i, a in enumerate(mc.AREA_SHORT[x] for x in mc.AREA_ORDER)}
 properties.sort(key=lambda p: (order.get((p["place"] or {}).get("area"), 99), p["street"]))
+porder = {p["id"]: i for i, p in enumerate(properties)}
 
 # Committed browser edits / new listings (exported from the page, committed by hand).
 LOCAL_P = DATA / "underwritten_local.json"
@@ -684,16 +904,68 @@ if LOCAL_P.exists():
             validation["committed"].append({"id": li.get("id"), "issue": f"{li.get('address')} is now a source CSV; the committed copy is skipped"})
             continue
         for c in li.get("comps", []):
-            st = comp_status({**c, "flags": c.get("flags", {f: 0 for f in SHEET_FLAGS})})
-            if st["status"] != "match":
-                validation["committed"].append({"id": li.get("id"), "issue": f"comp {c.get('id')} {st['status']}"})
+            au = audit_comp(c)
+            if not au["valid"]:
+                validation["committed"].append({"id": li.get("id"), "issue": f"comp {c.get('id') or c.get('url')}: {au['label']}"})
         committed["listings"].append(li)
     pids = {p["id"] for p in properties}
     for pid, ed in (loc_js.get("edits") or {}).items():
         if pid not in pids:
             validation["committed"].append({"id": pid, "issue": "edit for a property that is no longer in source_csv; skipped"})
             continue
+        for lab, ve in (ed.get("versions") or {}).items():
+            for c in ve.get("comps") or []:
+                au = audit_comp(c)
+                if not au["valid"]:
+                    validation["committed"].append({"id": pid, "issue": f"file {lab} comp {c.get('id') or c.get('url')}: {au['label']}"})
         committed["edits"][pid] = ed
+
+# Audit table: errors first, then big revenue / bedroom changes, then the rest.
+audit_rows.sort(key=lambda r: (0 if not r["valid"] else 1 if (r["bigRevenue"] or r["bedroomsChanged"]) else 2,
+                               porder.get(r["targetId"], 99), r["file"], r["row"]))
+
+
+def summary_line(rows):
+    n = len(rows)
+    if not n:
+        return "No comps."
+    cnt = {c: sum(r["cls"] == c for r in rows) for c in CLASS_LABEL}
+    errs = [r for r in rows if not r["valid"]]
+    big = sum(r["bigRevenue"] for r in rows)
+    beds = sum(r["bedroomsChanged"] for r in rows)
+    parts = [f"{n} comps: {cnt['usable']} usable", f"{cnt['possibly']} possibly good"]
+    e = f"{len(errs)} error{'s' if len(errs) != 1 else ''}"
+    if errs:
+        e += " (" + ", ".join(f"{cnt[c]} {CLASS_SHORT[c]}" for c in CLASS_ORDER if c in CLASS_SHORT and cnt[c]) + ")"
+    parts.append(e)
+    tail = f"{big} changed by more than 15%" + (f", {beds} with a different bedroom count" if beds else "")
+    return ", ".join(parts) + ", " + tail + "."
+
+
+summaries = []
+for p in properties:
+    for v in p["versions"]:
+        rows = [r for r in audit_rows if r["targetId"] == p["id"] and r["file"] == v["label"]]
+        s = summary_line(rows)
+        v["auditSummary"] = s
+        v["auditErrors"] = sum(not r["valid"] for r in rows)
+        summaries.append({"targetId": p["id"], "target": p["street"], "file": v["label"], "scenario": v["scenario"], "summary": s, "errors": v["auditErrors"]})
+
+REPORTS = ROOT / "reports"
+REPORTS.mkdir(exist_ok=True)
+with open(REPORTS / "comp_audit.csv", "w", newline="", encoding="utf-8") as fh:
+    w = csv.writer(fh, lineterminator="\n")
+    w.writerow(["target", "file", "scenario", "row", "comp_url", "room_id", "title", "class", "valid", "reason", "sheet_revenue", "current_revenue",
+                "revenue_change_pct", "revenue_change_over_15pct", "sheet_bedrooms", "current_bedrooms", "bedrooms_changed", "other_changes",
+                "appears_in", "title_match_candidates"])
+    for r in audit_rows:
+        other_ch = "; ".join(f"{c['field']} {c['sheet']} -> {c['current']}" for c in r["changes"] if c["field"] not in ("revenue", "bedrooms"))
+        w.writerow([r["target"], r["file"], r["scenario"], r["row"], r["url"], r["id"] or "", r["title"] or "", r["label"], "yes" if r["valid"] else "no",
+                    r["reason"] or "", "" if r["sheetRevenue"] is None else round(r["sheetRevenue"], 2), "" if r["currentRevenue"] is None else r["currentRevenue"],
+                    "" if r["revenueChangePct"] is None else r["revenueChangePct"], "yes" if r["bigRevenue"] else "",
+                    "" if r["sheetBedrooms"] is None else f"{r['sheetBedrooms']:g}", "" if r["currentBedrooms"] is None else f"{r['currentBedrooms']:g}",
+                    "yes" if r["bedroomsChanged"] else "", other_ch, " | ".join(r["appearsIn"]),
+                    " | ".join(f"{c['id']} ({CLASS_LABEL[c['cls']]})" for c in r["candidates"])])
 
 dump(DATA / "underwritten.json", {
     "generatedFrom": {"csvFolder": "underwriting/source_csv", "files": [p.name for p in files], "workbook": mc.XLSX.name, "snapshot": mc.SNAPSHOT,
@@ -702,7 +974,12 @@ dump(DATA / "underwritten.json", {
     "rules": {"area": "vote of the 3 nearest Airbnb listings (reproduces the main page's Ward areas for 100% of listings, leave-one-out)",
               "loc": "same thresholds as the listings: Gulf-front within 0.2 km of the Gulf shoreline (0.8 km if the notes say beachfront), beach walk within 0.6 km, "
                      "bay / canal if the notes say canal / bayfront / waterfront, else inland",
-              "geocode": "US Census geocoder (address-range interpolation along the street), overrides in data/geocode_overrides.json"},
+              "geocode": "US Census geocoder (address-range interpolation along the street), then OpenStreetMap Nominatim (house-level matches only); "
+                         "overrides in data/geocode_overrides.json",
+              "default": "the scenario marked default in data/version_labels.json, else the lowest file number"},
+    "audit": {"workbooks": [{"file": w["file"], "snapshot": w["snapshot"], "counts": w["counts"], "truth": i == 0} for i, w in enumerate(WBS)],
+              "classes": CLASS_LABEL, "valid": sorted(VALID), "rows": audit_rows, "summaries": summaries, "index": AUDIT_INDEX, "badUrls": BAD_URLS,
+              "report": "reports/comp_audit.csv"},
     "properties": properties, "validation": validation, "committed": committed,
 })
 dump(DATA / "amortization.json", amort_out)
@@ -719,22 +996,32 @@ def money_s(x):
 print(f"comps.json: {len(listings)} entire homes (of {len(allc)} cleaned; {len(other)} private/hotel rooms left out). "
       f"{sum(x['revenue'] >= 90000 for x in listings)} earn $90k+.")
 print(f"shoreline.json: {len(G)} Gulf shoreline points, display line {len(line)} points")
-print(f"underwritten.json: {len(properties)} properties, {sum(len(p['versions']) for p in properties)} versions from {len(files)} files")
+print(f"underwritten.json: {len(properties)} acquisition targets, {sum(len(p['versions']) for p in properties)} scenarios from {len(files)} files")
 for p in properties:
     pl = p["place"] or {}
     g_ = p["geo"] or {}
-    print(f"  {p['street']:<28} {', '.join(v['label'] for v in p['versions']):<10} {pl.get('areaName', '?'):<24} {pl.get('loc', '?'):<12} "
+    sc = ", ".join(f"{v['label']} {v['scenario']}" + (" (default)" if v["isDefault"] and len(p["versions"]) > 1 else "") for v in p["versions"])
+    print(f"  {p['street']:<28} {sc:<40} {pl.get('areaName', '?'):<24} {pl.get('loc', '?'):<12} "
           f"{pl.get('beachKm', float('nan')):.2f} km  geocode: {g_.get('source', 'FAILED')}{' (approx)' if g_.get('approximate') else ''}")
 V = validation
-print("\nVALIDATION REPORT")
-print(f"- Comps not in the current entire-home data ({len(V['missingComps'])}):")
-for x in V["missingComps"]:
-    print(f"    file {x['file']} row {x['row']} ({x['address']}): {x['id']} {x['status']} (sheet: {money_s(x['revenue'])}, {x['bedrooms']:g}BR)")
-print(f"- Comps whose current values differ from the sheet ({len(V['changedComps'])}):")
-for x in V["changedComps"]:
-    ch = "; ".join(f"{c['field']} {c['sheet']} -> {c['current']}" for c in x["changes"])
-    print(f"    file {x['file']} row {x['row']} ({x['address']}): {x['id']}: {ch}")
-print(f"- Possible duplicate properties ({len(V['duplicateProperties'])}):")
+print("\nCOMP AUDIT  (workbooks scanned: " + "; ".join(f"{w['file']} snapshot {w['snapshot']}" + (" = source of truth" if i == 0 else "")
+                                                     for i, w in enumerate(WBS)) + ")")
+for s_ in summaries:
+    print(f"  {s_['target']:<24} file {s_['file']:<4} {s_['scenario'] if s_['scenario'] != 'File ' + s_['file'] else '':<13} {s_['summary']}")
+print("  Errors:")
+for r in audit_rows:
+    if not r["valid"]:
+        cand = (" candidates: " + ", ".join(f"{c['id']} ({CLASS_LABEL[c['cls']]})" for c in r["candidates"])) if r["candidates"] else ""
+        print(f"    {r['target']} file {r['file']} row {r['row']}: {r['id'] or r['url'][:50]!s} -> {r['label']}: {r['reason']}{cand}")
+print("  Bedroom-count changes / revenue changes over 15%:")
+for r in audit_rows:
+    if r["valid"] and (r["bedroomsChanged"] or r["bigRevenue"]):
+        b = f"bedrooms {r['sheetBedrooms']:g} -> {r['currentBedrooms']:g}" if r["bedroomsChanged"] else ""
+        rv = f"revenue {money_s(r['sheetRevenue'])} -> {money_s(r['currentRevenue'])} ({r['revenueChangePct']:+.1f}%)" if r["bigRevenue"] else ""
+        print(f"    {r['target']} file {r['file']} row {r['row']}: {r['id']} " + "; ".join(x for x in (b, rv) if x))
+print(f"  -> reports/comp_audit.csv ({len(audit_rows)} rows)")
+print("\nSHEET CHECKS")
+print(f"- Possible duplicate targets ({len(V['duplicateProperties'])}):")
 for d in V["duplicateProperties"]:
     print("    " + " and ".join(f"{x['address']} (file {x['file']}, {money_s(x['price'])})" for x in d["properties"]) +
           f": same {d['details']['beds']:g} / {d['details']['baths']:g} bed/bath, lot {d['details']['lot']:,.0f}, size {d['details']['size']:,.0f} sqft")

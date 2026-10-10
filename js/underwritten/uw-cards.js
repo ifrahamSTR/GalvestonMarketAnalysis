@@ -1,14 +1,16 @@
 /**
- * Property cards: one expandable card per property, in two groups
- * (Underwritten, New listings). The collapsed header carries the decision
- * numbers (price, revenue cases, cash on cash, the 20% revenue-to-price
- * screen and the 4% low-case target); the expanded body holds every input,
- * the returns / taxes / 5-year blocks, the comp-set builder and the actions.
+ * Acquisition-target cards (the Zillow houses), one per target, in two
+ * groups (underwritten, new listings). The collapsed header carries the
+ * decision numbers (price, revenue cases, cash on cash, comp errors first,
+ * then the 20% revenue-to-price screen and the 4% low-case target); the
+ * expanded body holds the scenario comparison, every input, the returns /
+ * taxes / 5-year blocks, the comp table (the sheet's 15 columns, in revenue
+ * order, Airbnb comps only) and the actions.
  *
  * Editing never re-renders the field being typed in: inputs update the state,
  * and only the derived numbers ([data-d] slots) are redrawn.
  */
-/* global UWCsv, UWMath */
+/* global UWCsv, UWMath, UWRules */
 (function () {
   const UW = window.UW, F = UW.fmt, E = UW.esc;
   const C = (UW.cardsApi = {});
@@ -109,7 +111,7 @@
   // Header
   // ---------------------------------------------------------------------------
   function checkCount(p, v) {
-    let n = v.checks.length + v.comps.filter((c) => c.status !== "match").length;
+    let n = v.checks.length + v.comps.filter((c) => c.valid && c.status === "changed").length;
     if (!p.geo) n++;
     return n;
   }
@@ -120,12 +122,14 @@
     const low = o.cases.low.coc;
     const st = UW.cocStatus(low);
     const beds = d.beds != null ? F.num(d.beds) + " / " + F.num(d.baths) : p.listing ? F.num(p.listing.facts.projBeds || p.listing.facts.beds) + " / " + F.num(p.listing.facts.projBaths || p.listing.facts.baths) : "—";
+    const t = v.target, tgt = t.beds != null && (t.beds !== d.beds || t.baths !== d.baths || t.sleeps) ? '<span class="uw-fact"><b>' + F.num(t.beds) + " / " + F.num(t.baths) + (t.sleeps ? " / " + t.sleeps : "") + "</b> target</span>" : "";
+    const nErr = UW.compErrors(v).length;
     const kind = p.kind === "new" ? '<span class="uw-tag uw-tag--new">New listing</span>' : p.kind === "promoted" ? '<span class="uw-tag uw-tag--new">Promoted · from this browser</span>' : "";
     const edited = v.edited.inputs && p.kind === "underwritten" ? '<span class="uw-tag uw-tag--edit" title="Numbers recalculated from edited inputs">Edited · recalculated</span>' :
       UW.editSource(p.id, v.label) && p.kind === "underwritten" ? '<span class="uw-tag uw-tag--edit">Edited</span>' : "";
     const nChecks = checkCount(p, v);
-    const versionSel = p.versions.length > 1 ? '<label class="uw-vsel"><span>Version</span><select data-act="version" data-focus="ver-' + E(p.id) + '" aria-label="Sheet version for ' + E(p.street) + '">' +
-      p.versions.map((x) => '<option value="' + E(x.label) + '"' + (x.label === v.label ? " selected" : "") + ">File " + E(x.label) + (x.label === p.defaultVersion ? " (latest)" : "") + "</option>").join("") + "</select></label>" :
+    const versionSel = p.versions.length > 1 ? '<label class="uw-vsel"><span>Scenario</span><select data-act="version" data-focus="ver-' + E(p.id) + '" aria-label="Scenario for ' + E(p.street) + '">' +
+      p.versions.map((x) => '<option value="' + E(x.label) + '"' + (x.label === v.label ? " selected" : "") + ">" + E(UW.scenarioName(x)) + " · file " + E(x.label) + "</option>").join("") + "</select></label>" :
       p.kind === "underwritten" ? '<span class="uw-vfile">File ' + E(v.label) + "</span>" : "";
     const cocs = ["low", "mid", "high"].map((c) => '<span class="uw-coc uw-coc--' + UW.cocStatus(o.cases[c].coc) + '">' + F.pct(o.cases[c].coc) + "</span>").join('<span class="uw-sep">·</span>');
     const revs = ["low", "mid", "high"].map((c) => F.k(rev[c])).join('<span class="uw-sep">·</span>');
@@ -139,12 +143,12 @@
       '<div class="uw-head__right"><span class="uw-price">' + F.money(inp.price) + "</span>" + versionSel + "</div></div>" +
       '<div class="uw-head__facts">' + kind + edited +
       (p.url ? '<a class="uw-zlink" href="' + E(p.url) + '" target="_blank" rel="noopener">Zillow ↗</a>' : "") +
-      '<span class="uw-fact"><b>' + beds + "</b> bed / bath projected</span>" +
+      '<span class="uw-fact"><b>' + beds + "</b> bed / bath as listed</span>" + tgt +
       (p.place ? '<span class="uw-fact"><span class="region-dot" style="background:' + (UW.areaById[p.place.area] || {}).color + '"></span>' + E(p.place.areaName) + "</span>" +
         '<span class="uw-fact"><span class="uw-dot" style="background:' + UW.LOC_COLORS[p.place.loc] + '"></span>' + E(p.place.loc) + " · " + E(p.place.zone) + "</span>" : '<span class="uw-fact uw-fact--warn">No map pin</span>') + "</div>" +
       '<div class="uw-head__kpis"><div class="uw-kpi"><span class="uw-kpi__l">Revenue · low / mid / high</span><span class="uw-kpi__v">' + revs + "</span></div>" +
       '<div class="uw-kpi"><span class="uw-kpi__l">Cash on cash · low / mid / high</span><span class="uw-kpi__v">' + cocs + "</span></div>" +
-      '<div class="uw-head__badges">' + screen + target + (nChecks ? '<button type="button" class="uw-badge uw-badge--check" data-act="goto-checks">' + nChecks + " data check" + (nChecks === 1 ? "" : "s") + "</button>" : "") + "</div></div>";
+      '<div class="uw-head__badges">' + (nErr ? '<button type="button" class="uw-badge uw-badge--err" data-act="goto-comps">' + nErr + " comp error" + (nErr === 1 ? "" : "s") + "</button>" : "") + screen + target + (nChecks ? '<button type="button" class="uw-badge uw-badge--check" data-act="goto-checks">' + nChecks + " data check" + (nChecks === 1 ? "" : "s") + "</button>" : "") + "</div></div>";
   }
 
   // ---------------------------------------------------------------------------
@@ -193,11 +197,12 @@
 
   function statsHtml(p, v) {
     const s = UW.compStats(p, v);
-    if (!s.n) return '<p class="uw-empty">No comps chosen yet. Add them from the map or the nearest-comps list.</p>';
+    if (!s.total) return '<p class="uw-empty">No comps in this scenario yet. Add Airbnb comps from the map or the nearest-comps list.</p>';
     const tile = (val, lab) => '<div class="uw-stat"><strong>' + val + "</strong><span>" + lab + "</span></div>";
-    return '<div class="uw-stats">' + tile(s.n, "comps chosen") + tile(F.k(s.median), "median revenue") + tile(F.k(s.p25) + "–" + F.k(s.p75), "middle half") +
+    if (!s.n) return '<p class="uw-empty">All ' + s.total + " rows are comp errors, so there are no stats.</p>";
+    return '<div class="uw-stats">' + tile(s.n + (s.excluded ? '<small class="uw-excl">' + s.excluded + " excluded</small>" : ""), "valid comps") + tile(F.k(s.median), "median revenue") + tile(F.k(s.p25) + "–" + F.k(s.p75), "middle half") +
       tile(F.k(s.max), "highest") + tile(s.sameArea == null ? "—" : s.sameArea + " of " + s.known, "in the same area") + tile(s.sameLoc == null ? "—" : s.sameLoc + " of " + s.known, "same beach position") + "</div>" +
-      '<p class="uw-hint">These are the chosen comps’ revenue figures as they sit in the comp table. They are there to help you set the cases; the page never sets them.</p>';
+      '<p class="uw-hint">The valid comps’ revenue as it sits in the comp table' + (s.excluded ? " (" + s.excluded + " error row" + (s.excluded === 1 ? "" : "s") + " left out)" : "") + ". It is there to help you set the cases; the page never sets them.</p>";
   }
 
   function detailsHtml(p, v) {
@@ -206,7 +211,7 @@
     const comment = (c) => (c ? ' <span class="muted">' + E(c) + "</span>" : "");
     const geo = p.geo ? F.num(+p.geo.lat.toFixed(5)) + ", " + F.num(+p.geo.lng.toFixed(5)) + ' <span class="muted">(' + E(p.pinEdited ? "placed by hand" : p.geoNote || "") + ")</span>" : '<span class="uw-warn">No pin yet</span>';
     return '<dl class="uw-dl">' +
-      row("Bed / bath (projected)", d.beds != null ? F.num(d.beds) + " / " + F.num(d.baths) + comment(d.bedBathComment) : E(d.bedBathText || "")) +
+      row("Bed / bath (as listed)", d.beds != null ? F.num(d.beds) + " / " + F.num(d.baths) + comment(d.bedBathComment) : E(d.bedBathText || "")) +
       (L ? row("Bed / bath now", F.num(L.beds) + " / " + F.num(L.baths)) : "") +
       row("Lot size", d.lot != null ? Number(d.lot).toLocaleString("en-US") + " sqft" + comment(d.lotComment) : E(d.lotText || "")) +
       row("Property size", d.size != null ? Number(d.size).toLocaleString("en-US") + " sqft" + comment(d.sizeComment) : E(d.sizeText || "")) +
@@ -261,7 +266,13 @@
 
     const notes = '<section class="uw-box"><h4>Analyst notes</h4><textarea rows="9" data-notes="1" aria-label="Analyst notes" data-focus="' + pid + '-notes">' + E(v.notes) + "</textarea>" +
       '<p class="uw-hint">Same format as the sheet’s Analyst Notes cell. Bed / bath, lot and size are read from it.</p></section>';
-    const details = '<section class="uw-box"><h4>Property details</h4><div data-d="details">' + d.details + "</div>" +
+    const t = v.target;
+    const tin = (k, val, lab) => '<input type="number" min="0" step="' + (k === "baths" ? "0.5" : "1") + '" inputmode="decimal" value="' + (val == null ? "" : val) + '" data-tgt="' + k + '" aria-label="Target ' + lab + '" placeholder="—" data-focus="' + pid + "-t" + k + '">';
+    const targetCfg = '<div class="uw-tgtcfg"><p class="uw-flabel">Target configuration' + (p.versions.length > 1 ? " · " + E(UW.scenarioName(v)) : "") + "</p>" +
+      '<div class="uw-tgt"><label>Beds ' + tin("beds", t.beds, "bedrooms") + "</label><label>Baths " + tin("baths", t.baths, "bathrooms") + "</label><label>Sleeps " + tin("sleeps", t.sleeps, "sleeps") + "</label></div>" +
+      '<p class="uw-hint">The house as it will be run. Prefilled from the notes (' + E(t.from || "nothing to read") + "); “Match this property” ranks comps with these bedrooms ±1" +
+      (t.sleeps ? " and at least this many sleeps" : "") + ". Saved like your other edits.</p></div>";
+    const details = '<section class="uw-box"><h4>Property details</h4><div data-d="details">' + d.details + "</div>" + targetCfg +
       '<div class="uw-form uw-form--tight"><label for="wf-' + pid + '">Waterfront type</label><select id="wf-' + pid + '" data-wf="1" data-focus="' + pid + '-wf">' +
       UW.WATERFRONT_TYPES.map((t) => '<option value="' + t + '"' + (p.waterfront === t ? " selected" : "") + ">" + (t === "Bay-canal" ? "Bay / canal" : t === "None" ? "Not on the water" : t) + "</option>").join("") + "</select></div>" +
       '<p class="uw-hint">Can’t be read reliably from an address, so it defaults to the beach position and you can change it. It drives “Match this property”.</p>' +
@@ -272,6 +283,7 @@
     const comps = compsHtml(p, v);
     const checks = checksHtml(p, v);
     const amort = isUW ? '<details class="uw-amort" data-amort="' + E(v.file) + '"><summary>Amortization schedule, copied from the sheet (file ' + E(v.label) + ")</summary><div class=\"uw-amort__body\"><p class=\"uw-hint\">Loading…</p></div></details>" : "";
+    const scen = p.versions.length > 1 ? '<section class="uw-box uw-box--scen"><h4>Scenarios side by side <span class="muted">the same house, underwritten ' + p.versions.length + " ways</span></h4>" + UW.scenarioTable(p) + "</section>" : "";
     const actions = '<div class="uw-actions">' +
       '<button type="button" class="uw-btn" data-act="show"' + (p.geo ? "" : " disabled") + ">Show on map</button>" +
       '<button type="button" class="uw-btn uw-btn--ghost" data-act="copy-comps"' + (v.comps.length ? "" : " disabled") + ">Copy comps</button>" +
@@ -283,10 +295,10 @@
       (p.kind !== "underwritten" ? '<button type="button" class="uw-btn uw-btn--danger" data-act="delete">Delete listing</button>' : "") +
       (isUW && UW.editSource(p.id, v.label) ? '<button type="button" class="uw-btn uw-btn--ghost" data-act="revert">Discard edits to file ' + E(v.label) + "</button>" : "") + "</div>" +
       (p.kind === "new" && !p.listing.downloaded ? '<p class="uw-hint">“Promote to underwritten” unlocks once this listing’s UW CSV has been downloaded.</p>' : "") +
-      '<p class="uw-hint">The CSV starts from ' + (isUW ? "this property’s own sheet (" + E(v.file) + ")" : E(UW.data.uw.templateFile)) + " and replaces only the input cells: notes, URL, price, down payment, rate, closing, setup items, OPEX items, revenue cases and comp rows. " +
+      '<p class="uw-hint">The CSV starts from ' + (isUW ? "this target’s own sheet (" + E(v.file) + ")" : E(UW.data.uw.templateFile)) + " and replaces only the input cells: notes, URL, price, down payment, rate, closing, setup items, OPEX items, revenue cases and comp rows (written in revenue order). " +
       "Totals and returns keep the source’s values until the inputs are entered in the Google Sheet; the amortization block is copied unchanged.</p>";
 
-    return '<div class="uw-grid uw-grid--top">' + revenue + '<section class="uw-box uw-box--ret" data-d="returns">' + d.returns + "</section></div>" +
+    return scen + '<div class="uw-grid uw-grid--top">' + revenue + '<section class="uw-box uw-box--ret" data-d="returns">' + d.returns + "</section></div>" +
       '<div class="uw-grid uw-grid--2"><section class="uw-box"><h4>Taxes</h4><div data-d="taxes">' + d.taxes + '</div></section><section class="uw-box"><h4>5-year</h4><div data-d="five">' + d.five + "</div></section></div>" +
       '<div class="uw-grid uw-grid--3">' + purchase + setup + opex + "</div>" +
       '<div class="uw-grid uw-grid--2">' + notes + details + "</div>" +
@@ -296,42 +308,68 @@
   // ---------------------------------------------------------------------------
   // Comp set builder
   // ---------------------------------------------------------------------------
-  const STATUS = {
-    match: ["good", "Matches the workbook"], changed: ["warn", "Workbook values changed"], missing: ["bad", "Not in the current data"],
-    "other-room": ["bad", "A private or hotel room"], unrecognised: ["bad", "Not an Airbnb room link"],
-  };
-  function changeText(c) {
-    const f = (x, t) => (x == null ? "blank" : t === "money" ? F.money(x) : t === "money2" ? F.money2(x) : t === "pctpts" ? F.num(x) + "%" : F.num(x));
-    return c.changes.map((ch) => E(ch.label) + " " + f(ch.sheet, ch.fmt) + " → " + f(ch.current, ch.fmt)).join("; ");
+  const HEADER = UWCsv.COMP_HEADER;
+  const fmtVal = (x, t) => (x == null ? "—" : t === "money" ? F.money(x) : t === "money2" ? F.money2(x) : t === "pctpts" ? Number(x).toFixed(2) + "%" : F.num(x));
+  // A sheet value, with the workbook's current value beneath it in a small tag when they differ.
+  function cellWithChange(c, field, sheetHtml, fmt) {
+    const ch = c.changes.find((x) => x.field === field);
+    return sheetHtml + (ch ? '<span class="uw-chg" title="Current workbook value">now ' + fmtVal(ch.current, fmt) + "</span>" : "");
   }
   function compsHtml(p, v) {
     const pid = E(p.id);
+    const errs = v.comps.filter((c) => !c.valid);
     const rows = v.comps.map((c, i) => {
-      const l = UW.byId.get(c.id);
-      const st = STATUS[c.status];
-      const dist = l && p.geo ? F.mi(UW.geoMiles(p.geo, l)) : "";
-      const sub = l ? E(l.loc) + " · " + E(UW.areaById[l.area].name) + (dist ? " · " + dist : "") : "";
-      return '<tr class="uw-comp uw-comp--' + c.status + '"><td class="uw-comp__n">' + (i + 1) + "</td>" +
-        '<th scope="row" class="uw-comp__l"><a href="' + E(c.url) + '" target="_blank" rel="noopener">' + E(l ? l.title : c.url.replace(/^https?:\/\/(www\.)?/, "")) + '</a><span class="cell-sub">' + sub + "</span></th>" +
-        "<td>" + F.money(c.revenue) + "</td><td>" + F.num(c.bedrooms) + "</td><td>" + F.num(c.sleeps) + "</td><td>" + F.money2(c.adr) + "</td><td>" + (c.occupancy == null ? "—" : F.pct(c.occupancy)) + "</td>" +
-        '<td class="uw-comp__flags">' + UWCsv.SHEET_FLAGS.map((f) => UW.icon(f, UW.AMEN_LABEL[f], !!(c.flags && c.flags[f]))).join("") + "</td>" +
+      const l = c.valid ? UW.byId.get(c.id) : null;
+      const title = l ? l.title : c.title || (UW.ruleCtx.index[c.id] || {}).title || "";
+      const dist = l && p.geo ? F.mi(UW.geoMiles(p.geo, l)) : "—";
+      const urlCell = c.cls === "badurl" ? '<span class="uw-comp__bad">' + E(c.url || "(empty)") + "</span>" :
+        '<a href="' + E(c.url) + '" target="_blank" rel="noopener">' + E(c.url) + "</a>" + (title ? '<span class="cell-sub">' + E(title) + "</span>" : "");
+      const flags = UWCsv.SHEET_FLAGS.map((f) => { const on = c.flags && c.flags[f] ? 1 : 0; return '<td class="uw-comp__flag">' + cellWithChange(c, "HAS_" + f, '<span class="uw-flag uw-flag--' + on + '">' + on + "</span>", "num") + "</td>"; }).join("");
+      const occ = c.occupancy == null ? "—" : (c.occupancy * 100).toFixed(2) + "%";
+      const status = '<span class="uw-badge uw-badge--' + (c.valid ? (c.status === "changed" ? "warn" : "good") : "err") + '">' + E(c.valid ? (c.status === "changed" ? "Values changed" : c.label) : c.label) + "</span>" +
+        (c.cls === "possibly" ? ' <span class="uw-tag uw-tag--possibly">possibly good</span>' : "") +
+        (!c.valid ? '<span class="uw-comp__ch">' + E(c.reason) + "</span>" : "") +
+        (c.candidates && c.candidates.length ? '<span class="uw-comp__ch">Same title in the workbook: ' + c.candidates.map((x) => '<a href="' + E(x.url) + '" target="_blank" rel="noopener">' + E(x.id) + "</a> (" + E(UWRules.CLASSES[x.cls].label) + ")").join(", ") + ". Not substituted.</span>" : "") +
+        (c.valid && (c.bigRevenue || c.bedroomsChanged) ? '<span class="uw-comp__big">' + [c.bigRevenue && "revenue " + (c.revenueChangePct > 0 ? "+" : "") + c.revenueChangePct + "%", c.bedroomsChanged && "bedroom count changed"].filter(Boolean).join(" · ") + "</span>" : "") +
+        (c.valid && c.status === "changed" ? '<button type="button" class="uw-linkbtn" data-act="comp-update" data-id="' + E(c.id) + '">Use current workbook values</button>' : "");
+      return '<tr class="uw-comp uw-comp--' + (c.valid ? c.status : "error") + (c.valid && (c.bigRevenue || c.bedroomsChanged) ? " uw-comp--big" : "") + '" data-url="' + E(c.url || "") + '" data-rev="' + (c.revenue == null ? "" : c.revenue) + '" data-adr="' + (c.adr == null ? "" : c.adr) + '" data-cls="' + c.cls + '">' +
+        '<td class="uw-comp__url">' + urlCell + "</td>" +
+        '<td class="uw-comp__num">' + cellWithChange(c, "revenue", F.money(c.revenue), "money") + "</td>" +
+        '<td class="uw-comp__num">' + cellWithChange(c, "bedrooms", F.num(c.bedrooms), "num") + "</td>" +
+        '<td class="uw-comp__num">' + cellWithChange(c, "sleeps", F.num(c.sleeps), "num") + "</td>" +
+        '<td class="uw-comp__num">' + cellWithChange(c, "adr", F.money2(c.adr), "money2") + "</td>" +
+        '<td class="uw-comp__num">' + cellWithChange(c, "occupancy", occ, "pctpts") + "</td>" + flags +
         '<td class="uw-comp__notes"><textarea rows="2" data-cnote="' + i + '" aria-label="Notes for comp ' + (i + 1) + '" data-focus="' + pid + "-cn" + i + '">' + E(c.notes) + "</textarea></td>" +
-        '<td class="uw-comp__st"><span class="uw-badge uw-badge--' + st[0] + '">' + st[1] + "</span>" +
-        (c.status === "changed" ? '<span class="uw-comp__ch">' + changeText(c) + '</span><button type="button" class="uw-linkbtn" data-act="comp-update" data-i="' + i + '">Use current workbook values</button>' : "") +
-        (c.status === "missing" ? '<span class="uw-comp__ch">Not among the ' + UW.listings.length + " entire homes in the " + E(UW.data.comps.snapshot) + " workbook.</span>" : "") +
-        (c.status === "other-room" ? '<span class="uw-comp__ch">In Cleaned_Data, but not an entire home, so it is left out of the comps.</span>' : "") + "</td>" +
-        '<td class="uw-comp__act"><button type="button" class="uw-btn uw-btn--icon" data-act="comp-up" data-i="' + i + '" aria-label="Move comp ' + (i + 1) + ' up"' + (i ? "" : " disabled") + ">↑</button>" +
-        '<button type="button" class="uw-btn uw-btn--icon" data-act="comp-down" data-i="' + i + '" aria-label="Move comp ' + (i + 1) + ' down"' + (i < v.comps.length - 1 ? "" : " disabled") + ">↓</button>" +
-        '<button type="button" class="uw-btn uw-btn--icon" data-act="comp-del" data-i="' + i + '" aria-label="Remove comp ' + (i + 1) + '">×</button></td></tr>';
+        '<td class="uw-x">' + (l ? F.num(l.baths) : "—") + '</td><td class="uw-x">' + (l ? E(UW.areaById[l.area].name) : "—") + '</td><td class="uw-x">' + (l ? E(l.loc) : "—") + '</td><td class="uw-x">' + dist + "</td>" +
+        '<td class="uw-x uw-comp__st">' + status + "</td>" +
+        '<td class="uw-x uw-comp__act"><button type="button" class="uw-btn uw-btn--icon" data-act="comp-del" data-id="' + E(UW.compId(c) || "") + '" data-i="' + i + '" aria-label="Remove comp ' + (i + 1) + '">×</button></td></tr>';
     }).join("");
-    const counts = {};
-    v.comps.forEach((c) => (counts[c.status] = (counts[c.status] || 0) + 1));
-    return '<section class="uw-box uw-box--comps"><div class="uw-box__head"><h4>Comp set <span class="muted">' + v.comps.length + " of 15 rows</span></h4>" +
-      '<div class="uw-comps__tools"><button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="comp-sort"' + (v.comps.length > 1 ? "" : " disabled") + ">Sort by revenue, high to low</button>" +
+    // Rows sort by the sheet's revenue; say so when the workbook's current revenue would order them differently.
+    const curRev = (c) => (c.valid && c.current ? c.current.revenue : c.revenue);
+    const curOrder = v.comps.map((c, i) => [i, curRev(c), c.current ? c.current.adr : c.adr]).sort((a, b) => b[1] - a[1] || (b[2] || 0) - (a[2] || 0)).map((x) => x[0]);
+    const orderDiffers = curOrder.some((x, i) => x !== i);
+    const others = p.versions.filter((x) => x.label !== v.label && x.comps.length);
+    const noPool = /without pool|no pool/i.test(UW.scenarioName(v));
+    const empty = '<div class="uw-empty-comps"><p class="uw-empty">No comps in ' + (p.versions.length > 1 ? "the " + E(UW.scenarioName(v)) + " scenario" : "this comp set") + " yet.</p>" +
+      others.map((x) => '<button type="button" class="uw-btn uw-btn--small" data-act="start-from" data-from="' + E(x.label) + '">Start from the ' + E(UW.scenarioName(x)) + " comp set</button>").join("") +
+      (noPool ? '<button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="find-nopool"' + (p.geo ? "" : " disabled") + ">Find no-pool comps</button>" :
+        '<button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="show"' + (p.geo ? "" : " disabled") + ">Find comps on the map</button>") + "</div>";
+    return '<section class="uw-box uw-box--comps" id="uw-comps-' + pid + '"><div class="uw-box__head"><h4>Airbnb comp set' + (p.versions.length > 1 ? " · " + E(UW.scenarioName(v)) : "") + ' <span class="muted">' + v.comps.length + " of 15 rows · revenue high to low</span></h4>" +
+      '<div class="uw-comps__tools">' + (errs.length ? '<button type="button" class="uw-btn uw-btn--small uw-btn--danger" data-act="remove-flagged">Remove flagged comps (' + errs.length + ")</button>" : "") +
       '<button type="button" class="uw-btn uw-btn--small" data-act="show"' + (p.geo ? "" : " disabled") + ">Find comps on the map</button></div></div>" +
-      (v.comps.length ? '<p class="uw-hint">' + Object.entries(counts).map(([k, n]) => n + " " + STATUS[k][1].toLowerCase()).join(" · ") + ". Rows are never updated automatically.</p>" +
-        '<div class="table-scroll"><table class="data-table uw-comps"><thead><tr><th>#</th><th>Listing</th><th>Revenue</th><th>Beds</th><th>Sleeps</th><th>Nightly rate</th><th>Occupancy</th><th>Flags in the sheet</th><th>Notes</th><th>Against the workbook</th><th></th></tr></thead><tbody>' +
-        rows + "</tbody></table></div>" : '<p class="uw-empty">No comps yet. Select this property on the map, then add listings from the nearest-comps list or a listing’s popup.</p>') + "</section>";
+      (v.comps.length ? '<p class="uw-hint">' + E(compSummary(v)) + " Rows are never changed or removed automatically.</p>" +
+        '<div class="table-scroll"><table class="data-table uw-comps"><thead><tr>' + HEADER.map((h) => '<th scope="col" class="uw-sheetcol">' + E(h) + "</th>").join("") +
+        '<th scope="col" class="uw-x">Baths</th><th scope="col" class="uw-x">Area</th><th scope="col" class="uw-x">Beach position</th><th scope="col" class="uw-x">Distance to target</th><th scope="col" class="uw-x">Audit</th><th scope="col" class="uw-x"><span class="uw-sr">Remove</span></th></tr></thead><tbody>' +
+        rows + "</tbody></table></div>" + (orderDiffers ? '<p class="uw-hint uw-order-note">Order differs on current data: sorted by the sheet’s revenue (what each row carries into the sheet); the workbook’s current revenue would order some rows differently.</p>' : "") : empty) + "</section>";
+  }
+  function compSummary(v) {
+    const n = v.comps.length, cnt = {};
+    v.comps.forEach((c) => (cnt[c.cls] = (cnt[c.cls] || 0) + 1));
+    const errs = v.comps.filter((c) => !c.valid);
+    const big = v.comps.filter((c) => c.valid && c.bigRevenue).length, beds = v.comps.filter((c) => c.valid && c.bedroomsChanged).length;
+    const errParts = Object.keys(UWRules.CLASSES).filter((k) => !UWRules.CLASSES[k].valid && cnt[k]).map((k) => cnt[k] + " " + UWRules.CLASSES[k].short);
+    return n + " comps: " + (cnt.usable || 0) + " usable, " + (cnt.possibly || 0) + " possibly good, " + errs.length + " error" + (errs.length === 1 ? "" : "s") + (errParts.length ? " (" + errParts.join(", ") + ")" : "") +
+      ", " + big + " changed by more than 15%" + (beds ? ", " + beds + " with a different bedroom count" : "") + ".";
   }
   UW.geoMiles = (g, l) => window.UWGeo.miles(g.lat, g.lng, l.lat, l.lng);
 
@@ -339,8 +377,7 @@
     const items = v.checks.map((c) => "<li>" + E(c.text) + "</li>");
     if (!p.geo) items.unshift('<li class="uw-warn">No map pin: the geocoder could not match ' + E(p.address) + ". Place it on the map, or add it to data/geocode_overrides.json.</li>");
     else if (p.geo.approximate) items.unshift("<li>The geocoder only matched a shortened address (" + E(p.geo.query || "") + "). Check the pin.</li>");
-    const bad = v.comps.filter((c) => c.status !== "match");
-    if (bad.length) items.push("<li>" + bad.length + " comp row" + (bad.length === 1 ? "" : "s") + " differ from the current workbook or are missing from it (see the comp set).</li>");
+    if (v.comps.length) items.unshift("<li><strong>Comp audit:</strong> " + E(compSummary(v)) + "</li>");
     if (p.kind === "underwritten" && v.source === "sheet") {
       const res = UWMath.verify(v.base);
       const fails = res.rows.filter((r) => r.result === "FAIL" && r.key !== "principal");
@@ -374,6 +411,11 @@
     else if (t.dataset.clean) inputs[t.dataset.clean === "cost" ? "cleaningCost" : "cleaningTurns"] = val(t);
     else if (t.dataset.notes) { UW.setNotes(p.id, v.label, t.value.replace(/\r\n/g, "\n")); return; }
     else if (t.dataset.cnote != null) { const comps = v.comps.map((x) => Object.assign({}, x)); comps[+t.dataset.cnote].notes = t.value; UW.setComps(p.id, v.label, comps, { quiet: true }); return; }
+    else if (t.dataset.tgt) {
+      const box = t.closest(".uw-tgt"), get = (k) => { const n = box.querySelector('[data-tgt="' + k + '"]'); return n.value === "" ? null : Number(n.value); };
+      UW.setTarget(p.id, v.label, { beds: get("beds"), baths: get("baths"), sleeps: get("sleeps") });
+      return;
+    }
     else return;
     UW.setInputs(p.id, v.label, inputs);
   }
@@ -414,6 +456,10 @@
     const comps = () => v.comps.map((x) => Object.assign({}, x));
     switch (act) {
       case "toggle": toggle(p.id); break;
+      case "goto-comps":
+        UW.ui.expanded.add(p.id); C.renderCard(p.id);
+        UW.afterPointer(() => { const n = document.getElementById("uw-comps-" + p.id); if (n) n.scrollIntoView({ behavior: "smooth", block: "start" }); });
+        break;
       case "goto-checks":
         UW.ui.expanded.add(p.id); C.renderCard(p.id);
         document.getElementById("uw-checks-" + p.id).scrollIntoView({ behavior: "smooth", block: "center" });
@@ -430,18 +476,19 @@
         if (act === "setup-add") UW.afterPointer(() => { const n = document.querySelector('#uw-card-' + CSS.escape(p.id) + ' [data-setup-label="' + (inputs.setup.length - 1) + '"]'); if (n) n.focus(); });
         break;
       }
-      case "comp-up": case "comp-down": { const a = comps(), j = act === "comp-up" ? i - 1 : i + 1; [a[i], a[j]] = [a[j], a[i]]; UW.setComps(p.id, v.label, a); break; }
       case "comp-del": { const a = comps(); a.splice(i, 1); UW.setComps(p.id, v.label, a); break; }
-      case "comp-sort": UW.setComps(p.id, v.label, comps().sort((x, y) => (y.revenue || 0) - (x.revenue || 0))); break;
       case "comp-update": {
-        const a = comps(), l = UW.byId.get(a[i].id);
-        if (l) { a[i] = Object.assign(UW.compFromListing(l, a[i].notes), { url: a[i].url }); UW.setComps(p.id, v.label, a); UW.toast("Row " + (i + 1) + " now uses the current workbook values"); }
+        const a = comps(), k = a.findIndex((x) => UW.compId(x) === b.dataset.id), l = UW.byId.get(b.dataset.id);
+        if (l && k >= 0) { a[k] = Object.assign(UW.compFromListing(l, a[k].notes, p), { url: a[k].url }); UW.setComps(p.id, v.label, a); UW.toast("That row now uses the current workbook values"); }
         break;
       }
+      case "remove-flagged": UW.actions.removeFlagged(p.id, v.label); break;
+      case "start-from": UW.actions.startFrom(p.id, v.label, b.dataset.from); break;
+      case "find-nopool": UW.actions.findComps(p.id, v.label, { pool: -1 }); break;
       case "show": UW.select(p.id, { from: "card", focus: true }); document.getElementById("uw-map").scrollIntoView({ behavior: "smooth", block: "start" }); UW.panelApi.showTab("comps"); break;
-      case "copy-comps": UW.copy(UWCsv.compsTSV(v.comps), v.comps.length + " comp row" + (v.comps.length === 1 ? "" : "s") + " (15 columns, tab-separated, no header)"); break;
-      case "copy-rev": UW.copy(["low", "mid", "high"].map((k) => (UW.isNum(v.inputs.revenue[k]) ? Math.round(v.inputs.revenue[k]) : "")).join("\t"), "the revenue cases (low, mid, high)"); break;
-      case "csv": downloadCsv(p, v); break;
+      case "copy-comps": UW.actions.copyComps(p.id, v.label); break;
+      case "copy-rev": UW.actions.copyRevenue(p.id, v.label); break;
+      case "csv": UW.actions.downloadCsv(p.id, v.label); break;
       case "revert":
         if (confirm("Discard the edits to file " + v.label + " for " + p.street + " and go back to the sheet’s own numbers and comps?")) { UW.revert(p.id, v.label); C.renderCard(p.id); }
         break;
@@ -450,7 +497,7 @@
       case "osm": UW.addApi.lookupFor(p); break;
       case "edit-listing": UW.addApi.open(p.id); break;
       case "promote":
-        UW.updateListing(p.id, { promoted: true }); C.renderList(); UW.toast(p.street + " moved to Underwritten. Export your edits to share it."); break;
+        UW.updateListing(p.id, { promoted: true }); C.renderList(); UW.toast(p.street + " moved to the underwritten targets. Export your edits to share it."); break;
       case "demote": UW.updateListing(p.id, { promoted: false }); C.renderList(); break;
       case "delete":
         if (confirm("Delete " + p.street + "? This removes it from this browser" + (p.local ? "" : " (it stays in data/underwritten_local.json until that file changes)") + ".")) { UW.deleteListing(p.id); C.renderList(); }
@@ -462,23 +509,6 @@
     if (UW.ui.expanded.has(pid)) UW.ui.expanded.delete(pid); else UW.ui.expanded.add(pid);
     C.renderCard(pid);
     UW.afterPointer(() => { const t = document.querySelector("#uw-card-" + CSS.escape(pid) + " .uw-card__toggle"); if (t) t.focus({ preventScroll: true }); });
-  }
-
-  async function downloadCsv(p, v) {
-    const isUW = p.kind === "underwritten";
-    const file = isUW ? v.file : UW.data.uw.templateFile;
-    try {
-      const text = await UW.sourceCsv(file);
-      const model = Object.assign({}, UW.clone(v.inputs), { notes: v.notes, url: isUW ? v.url : p.url, comps: v.comps });
-      const out = UWCsv.exportSheet(text, model);
-      const stamp = new Date().toISOString().slice(0, 10);
-      const name = isUW ? file.replace(/( \(\d+\))?\.csv$/, "") + " - from site " + stamp + ".csv" : "New Market UW'ing - " + p.street.replace(/[\\/:*?"<>|]+/g, "-") + " " + stamp + ".csv";
-      UW.download(name, out);
-      if (!isUW && !p.listing.downloaded) { UW.updateListing(p.id, { downloaded: true }); C.renderCard(p.id); }
-      UW.toast("Downloaded " + name);
-    } catch (err) {
-      UW.toast("CSV not written: " + err.message, "warn");
-    }
   }
 
   // Re-render on state changes.

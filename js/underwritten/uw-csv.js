@@ -195,8 +195,9 @@
     if (model.revenue) ["low", "mid", "high"].forEach((c, k) => set(L.revenue[k], model.revenue[c] == null ? "" : acct(model.revenue[c])));
     if (model.comps) {
       if (model.comps.length > 15) throw new Error("The comp table holds 15 rows");
+      const comps = sortComps(model.comps);
       for (let k = 0; k < 15; k++) {
-        const c = model.comps[k];
+        const c = comps[k];
         const cells = c ? [c.url, c.revenue == null ? "" : dollars2(c.revenue), plainNum(c.bedrooms), plainNum(c.sleeps), c.adr == null ? "" : dollars2(c.adr),
           c.occupancy == null ? "" : pctCell(c.occupancy, 2)].concat(SHEET_FLAGS.map((f) => String(c.flags && c.flags[f] ? 1 : 0)), [c.notes || ""]) : COMP_HEADER.map(() => "");
         cells.forEach((v, j) => set([L.comps.first + k, L.comps.col + j], v));
@@ -218,13 +219,23 @@
     return p.spans.slice(L.amort.first, L.amort.last + 1).join(p.eol);
   }
 
-  // Tab-separated comp rows for pasting into the sheet (no header).
+  /**
+   * Comp order everywhere (tables, lists' copies, Download UW CSV): the sheet's
+   * Revenue Potential high -> low (the value the row carries into the sheet),
+   * ties by ADR high -> low; stable otherwise. Rows without revenue go last.
+   */
+  function sortComps(comps) {
+    const v = (x) => (x == null || x === "" || isNaN(x) ? -Infinity : Number(x));
+    return comps.map((c, i) => [c, i]).sort((a, b) => v(b[0].revenue) - v(a[0].revenue) || v(b[0].adr) - v(a[0].adr) || a[1] - b[1]).map((x) => x[0]);
+  }
+
+  // Tab-separated comp rows for pasting into the sheet (no header), always revenue-descending.
   function compsTSV(comps) {
     const clean = (s) => String(s == null ? "" : s).replace(/[\t\r\n]+/g, " ").trim();
-    return comps.map((c) => [c.url, c.revenue == null ? "" : Math.round(c.revenue), plainNum(c.bedrooms), plainNum(c.sleeps),
+    return sortComps(comps).map((c) => [c.url, c.revenue == null ? "" : Math.round(c.revenue), plainNum(c.bedrooms), plainNum(c.sleeps),
       c.adr == null ? "" : Number(c.adr).toFixed(2), c.occupancy == null ? "" : (c.occupancy * 100).toFixed(2) + "%"]
       .concat(SHEET_FLAGS.map((f) => (c.flags && c.flags[f] ? 1 : 0)), [clean(c.notes)]).join("\t")).join("\n");
   }
 
-  return { COMP_HEADER, SHEET_FLAGS, parse, serializeRow, locate, exportSheet, amortBlock, compsTSV, acct, pctCell };
+  return { COMP_HEADER, SHEET_FLAGS, parse, serializeRow, locate, exportSheet, amortBlock, compsTSV, sortComps, acct, pctCell };
 });
