@@ -1,0 +1,29 @@
+/* Main page: the "Underwriting" section near the top (js/underwritten/uw-strip.js).
+   Built only on the tokens in styles.css, which stays unchanged. */
+.uwx { background: var(--color-surface); }
+.uwx-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 10px 20px; }
+.uwx-head h2 { margin: 0; }
+.uwx-head__links { display: flex; flex-wrap: wrap; gap: 8px; }
+.uwx-head__links .btn { margin-top: 0; }
+.uwx-lede { max-width: 900px; margin: 10px 0 16px; }
+.uwx-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(255px, 1fr)); gap: 12px; }
+.uwx-card { display: flex; flex-direction: column; gap: 5px; padding: 12px 14px; border: var(--hairline); border-top: 3px solid var(--c, var(--color-border)); border-radius: var(--radius);
+  background: var(--surface-tint); color: var(--color-text); text-decoration: none; transition: box-shadow 0.15s, transform 0.15s; min-width: 0; }
+.uwx-card:hover, .uwx-card:focus-visible { box-shadow: var(--shadow), 0 0 0 2px color-mix(in srgb, var(--brand-green) 30%, white); transform: translateY(-1px); outline: none; }
+.uwx-card--good { --c: #1B7A43; } .uwx-card--warn { --c: #b7791f; } .uwx-card--bad { --c: #b3261e; } .uwx-card--none { --c: #9aa5ad; }
+.uwx-card--new { background: color-mix(in srgb, #3C6E9E 6%, white); }
+.uwx-card__top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.uwx-card__name { font-weight: 800; color: var(--color-primary); font-size: 1rem; line-height: 1.25; }
+.uwx-card__price { font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.uwx-card__sub { font-size: 0.78rem; color: var(--color-text-muted); }
+.uwx-card__row { display: flex; flex-direction: column; gap: 0; font-size: 0.92rem; font-variant-numeric: tabular-nums; color: var(--text-primary); font-weight: 600; }
+.uwx-card__l { color: var(--color-text-muted); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; }
+.uwx-coc--good { color: #1B7A43; } .uwx-coc--warn { color: #8a5a10; } .uwx-coc--bad { color: #b3261e; } .uwx-coc--none { color: var(--color-text-muted); }
+.uwx-card__badges { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 3px; }
+.uwx-b { font-size: 0.7rem; font-weight: 700; padding: 2px 7px; border-radius: 999px; }
+.uwx-b--good { background: color-mix(in srgb, #1B7A43 11%, white); color: #1B7A43; }
+.uwx-b--warn { background: #fbf0d2; color: #8a5a10; }
+.uwx-b--bad { background: #fbe4e2; color: #b3261e; }
+.uwx-b--none { background: #eef1f3; color: #5A6B78; }
+.uwx-card__go { margin-left: auto; font-size: 0.78rem; font-weight: 700; color: var(--color-primary-light); }
+@media (max-width: 600px) { .uwx-head { align-items: flex-start; } .uwx-grid { grid-template-columns: 1fr; } }

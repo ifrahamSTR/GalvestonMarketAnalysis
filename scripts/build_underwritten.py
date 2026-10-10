@@ -1,0 +1,763 @@
+"""
+Build the data behind underwritten.html (Underwritten Properties):
+
+  ../Galveston - TX (2).xlsx via ../notebooks/market_common.py  -> data/comps.json
+  the Gulf shoreline the notebooks use (mc.gulf_shoreline())     -> data/shoreline.json
+  underwriting/source_csv/*.csv  (+ data/underwritten_local.json) -> data/underwritten.json
+                                                                    data/amortization.json
+  US Census geocoder, cached in data/geocode_cache.json, with manual lat/lng in data/geocode_overrides.json
+
+Run from anywhere (same Python env as generate_webpage_data.py):
+    python scripts/build_underwritten.py            # geocodes addresses not yet cached
+    python scripts/build_underwritten.py --offline  # never calls the geocoder
+It prints the validation report, then runs tests/test_underwritten.mjs (formula
+pass/fail table + CSV export tests) when node is on PATH.
+
+Idempotent: the same inputs give byte-identical outputs (no timestamps). Do not
+hand-edit the generated files. The sheets are read by label, not fixed cell, and
+nothing here edits a sheet value: mismatches are reported, never fixed.
+"""
+import csv
+import hashlib
+import io
+import json
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from scipy.spatial import ConvexHull, cKDTree
+
+ROOT = Path(__file__).resolve().parent.parent
+NB = ROOT.parent / "notebooks"
+DATA = ROOT / "data"
+SRC = ROOT / "underwriting" / "source_csv"
+OFFLINE = "--offline" in sys.argv
+
+if not (NB / "market_common.py").exists():
+    sys.exit(f"STOP: {NB / 'market_common.py'} not found. The comp classifications must come from "
+             "market_common.load() so they match the main page; not falling back to a re-implementation.")
+sys.path.insert(0, str(NB))
+import market_common as mc  # noqa: E402
+
+COMP_HEADER = ["Listing URL", "Revenue Potential", "Bedrooms", "Sleeps", "ADR", "Occupancy", "HAS_hot_tub", "HAS_pool",
+               "HAS_game_room", "HAS_pickleball", "HAS_mini_golf", "HAS_sauna", "HAS_playground", "HAS_waterfront", "Notes"]
+SHEET_FLAGS = [h[4:] for h in COMP_HEADER if h.startswith("HAS_")]
+SAYS_FRONT = r"beachfront|beach front|oceanfront|ocean front|gulf front|gulffront|on the beach|on the sand"  # market_common.load()
+SAYS_WATER = r"canal|bayfront|bay front|on the bay|waterfront"                                              # market_common.load()
+CITIES = ["Jamaica Beach", "Tiki Island", "Bayou Vista", "La Marque", "Texas City", "Crystal Beach", "Port Bolivar", "Galveston", "Hitchcock", "Kemah"]
+
+
+def dump(path, obj):
+    path.write_text(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+
+
+def r(x, n=0):
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return None
+    return int(round(float(x))) if n == 0 else round(float(x), n)
+
+
+# ---------------------------------------------------------------------------
+# 1. Airbnb comps -> data/comps.json
+# ---------------------------------------------------------------------------
+df, P75, P90 = mc.load()
+allc = pd.read_excel(mc.XLSX, sheet_name="Cleaned_Data", engine="openpyxl")
+allc = allc[allc["Property ID"].notna()].copy()
+allc["room"] = allc["Listing URL"].astype(str).str.extract(r"rooms/(\d+)")[0]
+assert len(df) == 923 and len(allc) == 942, (len(df), len(allc))
+assert not allc["Exclude_Comp"].astype(bool).any()  # filters nothing in this workbook; noted on the page
+
+df["room"] = df["Listing URL"].astype(str).str.extract(r"rooms/(\d+)")[0]
+assert df["room"].notna().all() and (df["room"] == df["Property ID"].str.replace("abnb_", "", regex=False)).all()
+flag_cols = [c for c in df.columns if c.startswith("HAS_")]
+FLAG_KEYS = [c[4:] for c in flag_cols]
+q = df.groupby("size")["idx"].quantile([0.75, 0.90]).unstack()
+df["size_top"] = np.select([df["idx"] >= df["size"].map(q[0.90]), df["idx"] >= df["size"].map(q[0.75])], ["top10", "top25"], "rest")
+X = mc.coords_km(df)
+QUAL = {"Good Data": "Good", "Possibly Good Data": "Possibly Good"}
+
+
+def listing(row):
+    return {
+        "id": row["room"], "title": str(row["Listing_Title"]), "url": str(row["Listing URL"]),
+        "bedrooms": r(row["Bedrooms"], 1), "sleeps": r(row["Sleeps"], 1), "beds": r(row["Bed_Count"], 1), "baths": r(row["Baths"], 1),
+        "revenue": r(row["Revenue Potential"], 2), "adr": r(row["ADR"], 4), "occ": r(row["Occupancy"], 6),
+        "lat": r(row["Lat"], 6), "lng": r(row["Long"], 6), "zip": None if pd.isna(row["ZIPCODE"]) else str(int(row["ZIPCODE"])),
+        "flags": [k for k, c in zip(FLAG_KEYS, flag_cols) if row[c] == 1],
+        "fav": int(row["is_guest_favorite"] == 1), "rating": r(row["Ratings"], 2), "reviews": r(row["Reviews"]),
+        "quality": QUAL.get(row["Data Quality Category"], row["Data Quality Category"]), "status": row["Listing_Status"],
+        "kids": r(row["pct_stayed_with_kids"], 2), "group": r(row["pct_group_trip"], 2),
+        "area": mc.AREA_SHORT[row["Area"]], "loc": row["loc"], "town": bool(row["town"]), "size": row["size"],
+        "vsSize": r(row["idx"], 3), "sizeTier": row["size_tier"], "sizeTop": row["size_top"],
+        "tier": {"Top 10%": "top10", "Top 25%": "top25"}.get(row["tier"], "bottom75"), "beachKm": r(row["beach_km"], 3),
+    }
+
+
+listings = [listing(row) for _, row in df.iterrows()]
+
+# Area outlines exactly as the main page's overview map draws them (convex hull, 0.35 km buffer).
+coslat = np.cos(np.radians(df["Lat"].mean()))
+areas_out = []
+for a in mc.AREA_ORDER:
+    g = df[df["Area"] == a]
+    pts = g[["Long", "Lat"]].to_numpy()
+    hull = pts[ConvexHull(pts).vertices]
+    c = hull.mean(axis=0)
+    kx = np.array([111 * coslat, 111.0])
+    buf = [p + ((p - c) * kx / (np.linalg.norm((p - c) * kx) + 1e-9)) * 0.35 / kx for p in hull]
+    areas_out.append({"id": mc.AREA_SHORT[a], "name": a, "sub": mc.AREA_SUB[a], "color": mc.AREA_COLORS[a], "town": a in mc.TOWN,
+                      "n": int(len(g)), "hull": [[round(p[1], 5), round(p[0], 5)] for p in buf],
+                      "label": [round(g["Lat"].quantile(0.9) + 0.003, 5), round(g["Long"].mean(), 5)]})
+
+size_med = df.groupby("size")["Revenue Potential"].median()
+other = allc[~allc["room"].isin(df["room"])]
+DATA.mkdir(exist_ok=True)
+dump(DATA / "comps.json", {
+    "source": f"{mc.XLSX.name}, sheet Cleaned_Data, entire homes only (Base_Table.roomType == 'Entire home/apt')",
+    "snapshot": mc.SNAPSHOT, "market": mc.MARKET, "n": len(listings), "nCleaned": int(len(allc)), "nOtherRooms": int(len(other)),
+    "excludeCompUsed": False, "guestFavoriteAny": bool(df["is_guest_favorite"].eq(1).any()),
+    "flagKeys": FLAG_KEYS, "sheetFlags": SHEET_FLAGS,
+    "sizeOrder": mc.SIZE_ORDER, "sizeMedian": {s: r(v) for s, v in size_med.items()},
+    "locName": mc.LOC_NAME, "locOrder": mc.LOC_ORDER, "locDef": mc.LOC_DEF, "zones": ["Town", "West End"],
+    "marketP75": r(P75), "marketP90": r(P90), "areas": areas_out,
+    "otherRooms": sorted(other["room"].dropna().tolist()),
+    "listings": listings,
+})
+
+# ---------------------------------------------------------------------------
+# 2. Gulf shoreline -> data/shoreline.json (the points the notebooks measure to)
+# ---------------------------------------------------------------------------
+G = mc.gulf_shoreline()
+GX = mc._xy(G[:, 0], G[:, 1])
+a0, b0 = mc._xy([29.085], [-95.125])[0], mc._xy([29.335], [-94.725])[0]
+ax = (b0 - a0) / np.linalg.norm(b0 - a0)
+u = (GX - a0) @ ax
+v = (GX - a0) @ np.array([ax[1], -ax[0]])
+line = []
+for bb in np.unique(np.floor(u / 0.1)):  # display line: the most seaward point every 100 m along the island
+    m = np.where(np.floor(u / 0.1) == bb)[0]
+    k = m[np.argmax(v[m])]
+    line.append([round(G[k, 0], 5), round(G[k, 1], 5)])
+dump(DATA / "shoreline.json", {
+    "source": json.loads(mc.COAST.read_text())["source"] + "; Gulf side only, densified to ~20 m, as market_common.gulf_shoreline()",
+    "projection": "x = (lng + 95) * 111 * cos(29.2 deg), y = (lat - 29.2) * 111 (km), as market_common._xy",
+    "thresholdsKm": {"gulfFront": 0.2, "gulfFrontIfListed": 0.8, "beachWalk": 0.6},
+    "points": [[round(p[0], 6), round(p[1], 6)] for p in G], "line": line,
+})
+SHORE = cKDTree(GX)
+LTREE = cKDTree(X)
+AREA_OF = df["Area"].to_numpy()
+
+
+def place(lat, lng, text):
+    """Area, beach position and zone for a point, by the same rules as the listings."""
+    p = mc._xy([lat], [lng])
+    km = float(SHORE.query(p)[0][0])
+    d, i = LTREE.query(p, k=3)
+    votes = list(AREA_OF[i[0]])
+    area = max(set(votes), key=lambda a: (votes.count(a), -votes.index(a)))  # 3-nearest-listing vote, tie -> nearest
+    t = (text or "").lower()
+    front, water = bool(re.search(SAYS_FRONT, t)), bool(re.search(SAYS_WATER, t))
+    gulf = km <= 0.2 or (front and km <= 0.8)
+    walk = not gulf and km <= 0.6
+    loc = "Gulf-front" if gulf else "Beach walk" if walk else "Bay / canal" if water else "Inland"
+    return {"beachKm": round(km, 3), "area": mc.AREA_SHORT[area], "areaName": area, "town": area in mc.TOWN,
+            "zone": "Town" if area in mc.TOWN else "West End", "loc": loc,
+            "waterfrontDefault": {"Gulf-front": "Gulf-front", "Bay / canal": "Bay-canal"}.get(loc, "None"),
+            "notesSay": {"front": front, "water": water}}
+
+
+# ---------------------------------------------------------------------------
+# 3. Underwriting sheets
+# ---------------------------------------------------------------------------
+def money(s):
+    s = (s or "").strip()
+    if not s:
+        return None
+    t = re.sub(r"[^\d.]", "", s)
+    if not t:
+        return 0.0 if "-" in s else None  # accounting zero " $ -   "
+    v = float(t)
+    return -v if ("(" in s or s.lstrip("$ ").startswith("-") or s.startswith("-")) else v
+
+
+def pct(s):
+    s = (s or "").strip()
+    if not s:
+        return None
+    v = float(re.sub(r"[^\d.\-]", "", s)) / 100
+    return v
+
+
+def num(s):
+    s = (s or "").strip()
+    return float(s) if re.fullmatch(r"-?\d+(\.\d+)?", s) else money(s)
+
+
+def norm(s):
+    return re.sub(r"\s+", " ", (s or "").strip()).lower()
+
+
+def A1(ri, ci):
+    return f"{chr(65 + ci)}{ri + 1}"
+
+
+def find(rows, label, start=0, col=None, prefix=False):
+    want = norm(label)
+    for i in range(start, len(rows)):
+        for j, c in enumerate(rows[i]):
+            if col is not None and j != col:
+                continue
+            n = norm(c)
+            if n == want or (prefix and n.startswith(want)):
+                return i, j
+    return None
+
+
+def parse_notes(text):
+    t = text or ""
+
+    def grab(pat):
+        m = re.search(pat, t, re.I)
+        return m.group(1).strip() if m else None
+
+    bb = grab(r"Bed\s*/\s*Bath\s*\(projected\)\s*:\s*([^\n]*)")
+    lot = grab(r"Lot Size\s*\(sqft\)\s*:\s*([^\n]*)")
+    size = grab(r"Prop Size\s*\(sqft\)\s*:\s*([^\n]*)")
+    out = {"bedBathText": bb, "lotText": lot, "sizeText": size, "beds": None, "baths": None, "lot": None, "size": None}
+    if bb:
+        m = re.match(r"(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)\s*(.*)", bb)
+        if m:
+            out.update(beds=float(m.group(1)), baths=float(m.group(2)), bedBathComment=m.group(3).strip() or None)
+    for key, txt in (("lot", lot), ("size", size)):
+        m = re.match(r"([\d,]+(?:\.\d+)?)\s*(.*)", txt or "")
+        if m:
+            out[key] = float(m.group(1).replace(",", ""))
+            out[key + "Comment"] = m.group(2).strip(" ,") or None
+    why = t.split("Why This Property?", 1)[1] if "Why This Property?" in t else ""
+    out["why"] = [ln.strip()[2:].strip(" ,") for ln in why.splitlines() if ln.strip().startswith("--") and ln.strip()[2:].strip(" ,")]
+    return out
+
+
+def parse_sheet(path):
+    raw = path.read_bytes()
+    text = raw.decode("utf-8")
+    rows = list(csv.reader(io.StringIO(text, newline="")))
+    g = lambda i, j: rows[i][j] if i < len(rows) and j < len(rows[i]) else ""  # noqa: E731
+    lay, issues = {}, []
+
+    ri, ci = find(rows, "Analyst Notes")
+    notes, lay["notes"] = g(ri + 1, ci), A1(ri + 1, ci)
+    ri, ci = find(rows, "PROPERTY URL:")
+    url, lay["url"] = g(ri, ci + 1).strip(), A1(ri, ci + 1)
+    pb = find(rows, "Prepared By:")
+    prepared = g(pb[0], pb[1] + 1).strip() if pb else None
+
+    # Purchase details: labels in one column, % one to the right, $ two to the right.
+    pr, pc = find(rows, "Purchase Details")
+    P = {}
+    for key, label, pre in (("price", "Purchase Price", False), ("dp", "Down Payment", False), ("loan", "Loan Amount", False),
+                            ("rate", "Interest Rate", False), ("mortgageYears", "Mortgage Years", False), ("closing", "Closing Costs", False),
+                            ("setupTotal", "Renovation / Amenities / Furniture", True), ("oop", "Total Out of Pocket", True)):
+        hit = find(rows, label, pr, pc, pre)
+        P[key] = hit
+        if hit is None:
+            issues.append(f"label '{label}' not found")
+    price = money(g(P["price"][0], pc + 2)); lay["price"] = A1(P["price"][0], pc + 2)
+    dpPct = pct(g(P["dp"][0], pc + 1)); lay["dpPct"] = A1(P["dp"][0], pc + 1)
+    rate = pct(g(P["rate"][0], pc + 2)); lay["rate"] = A1(P["rate"][0], pc + 2)
+    closingPct = pct(g(P["closing"][0], pc + 1)); lay["closingPct"] = A1(P["closing"][0], pc + 1)
+    mortgageYears = num(g(P["mortgageYears"][0], pc + 2))
+
+    # Setup ("Optimzation List") items down to its Total row.
+    hr, hc = find(rows, "Optimzation List", prefix=True) or find(rows, "Optimization List", prefix=True)
+    tr = find(rows, "Total", hr + 1, hc)[0]
+    setup = []
+    for i in range(hr + 1, tr):
+        lab, amt = g(i, hc), money(g(i, hc + 1))  # label kept exactly as written (export writes it back)
+        if lab.strip() or amt is not None:
+            setup.append({"label": lab, "amount": amt, "row": i + 1})
+    lay["setup"] = {"col": chr(65 + hc), "amountCol": chr(66 + hc), "first": hr + 2, "last": tr, "total": A1(tr, hc + 1)}
+    setup_total_sheet = money(g(tr, hc + 1))
+
+    # OPEX, monthly, down to "Total Operating Expenses".
+    orr, oc = find(rows, "Operating Expenses (OPEX)")
+    otr = find(rows, "Total Operating Expenses", orr + 1, oc)[0]
+    opex = []
+    for i in range(orr + 1, otr):
+        lab = g(i, oc).strip()
+        if lab:
+            item = {"label": lab, "amount": money(g(i, oc + 1)), "row": i + 1}
+            if g(i, oc + 2).strip():
+                item["note"] = g(i, oc + 2).strip()
+            if norm(lab) == "cleaning":
+                item["cleaning"] = True
+            opex.append(item)
+    cr, cc = find(rows, "Cleaning Cost")
+    tnr, tnc = find(rows, "# of Turns")
+    cleaningCost, cleaningTurns = money(g(cr + 1, cc)), num(g(tnr + 1, tnc))
+    lay["opex"] = {"col": chr(65 + oc), "amountCol": chr(66 + oc), "first": orr + 2, "last": otr, "total": A1(otr, oc + 1),
+                   "cleaningCost": A1(cr + 1, cc), "cleaningTurns": A1(tnr + 1, tnc)}
+
+    # Returns block: the row whose three cells read Low / Mid / High.
+    lr = lc = None
+    for i, row in enumerate(rows):
+        for j in range(len(row) - 2):
+            if [norm(x) for x in row[j:j + 3]] == ["low", "mid", "high"]:
+                lr, lc = i, j
+                break
+        if lr is not None:
+            break
+    RET = [("revenue", "Forecasted Revenue"), ("opex", "Operating Expenses"), ("pm", "Property Management Fee"), ("noi", "Net Operating Income"),
+           ("ds", "Debt Service"), ("fcf", "Free CashFlow"), ("coc", "Cash on Cash"), ("principal", "Principal Pay Down"),
+           ("appr", "Annual RE Appreciation"), ("totalReturnTax", "Total Return + Year 1 Tax Savings"), ("totalReturn", "Total Return")]
+    cases, rpar = {"low": {}, "mid": {}, "high": {}}, {}
+    for i in range(lr + 1, lr + 16):
+        lab = norm(g(i, pc))
+        for key, label in RET:
+            if lab.startswith(norm(label)) and not (key == "totalReturn" and "tax" in lab):
+                for k, case in enumerate(("low", "mid", "high")):
+                    cell = g(i, lc + k)
+                    cases[case][key] = pct(cell) if key in ("coc", "totalReturn", "totalReturnTax") else money(cell)
+                if g(i, pc + 1).strip():
+                    rpar[key] = pct(g(i, pc + 1))
+                if key == "revenue":
+                    lay["revenue"] = [A1(i, lc), A1(i, lc + 1), A1(i, lc + 2)]
+                break
+
+    # Comp table.
+    hr2, hc2 = find(rows, "Listing URL")
+    header = [g(hr2, hc2 + k).strip() for k in range(15)]
+    if header != COMP_HEADER:
+        issues.append("comp table header differs from the expected 15 columns: " + " | ".join(header))
+    comps = []
+    for i in range(hr2 + 1, hr2 + 16):
+        cells = [g(i, hc2 + k) for k in range(15)]
+        if not cells[0].strip():
+            if any(c.strip() for c in cells):
+                issues.append(f"comp row {i + 1} has values but no Listing URL")
+            continue
+        m = re.search(r"rooms/(\d+)", cells[0])
+        comps.append({"row": i + 1, "url": cells[0].strip(), "id": m.group(1) if m else None, "revenue": money(cells[1]),
+                      "bedrooms": num(cells[2]), "sleeps": num(cells[3]), "adr": money(cells[4]), "occupancy": pct(cells[5]),
+                      "flags": {f: int(num(cells[6 + k]) or 0) for k, f in enumerate(SHEET_FLAGS)}, "notes": cells[14]})
+    lay["comps"] = {"header": A1(hr2, hc2), "first": hr2 + 2, "last": hr2 + 16, "col": chr(65 + hc2)}
+
+    # Taxes and 5-year blocks.
+    tx_r, tx_c = find(rows, "Taxes")
+    T = {}
+    for key, label in (("landPct", "Land Assumptions"), ("basis", "Improvement Basis"), ("slas", "Short Life Assets"),
+                       ("bonusPct", "Bonus Amount"), ("taxRate", "Tax Rate"), ("y1Loss", "Y1 Loss from Depreciation"), ("taxSavings", "Tax Savings")):
+        hit = find(rows, label, tx_r, tx_c, True)
+        cell = g(hit[0], tx_c + 1)
+        T[key] = pct(cell) if key in ("landPct", "bonusPct", "taxRate") else money(cell)
+    fy_r, fy_c = find(rows, "5 Year")
+    F = {}
+    for key, label in (("cashFlow", "Cash Flow"), ("equity", "Equity"), ("appreciation", "Appreciation"), ("total", "Total")):
+        hit = find(rows, label, fy_r, fy_c)
+        F[key] = money(g(hit[0], fy_c + 1))
+
+    # Amortization block: the second "Loan Amount" label (not the purchase one) down to the last month row.
+    am = find(rows, "Loan Amount", P["loan"][0] + 1)
+    while am and am[1] == pc:
+        am = find(rows, "Loan Amount", am[0] + 1)
+    ar, ac = am
+    vc = next(j for j in range(ac + 1, len(rows[ar])) if rows[ar][j].strip())
+    a_loan = money(g(ar, vc))
+    a_rate = pct(g(find(rows, "Interest Rate", ar, ac)[0], vc))
+    a_years = num(g(find(rows, "Amortization Years", ar, ac)[0], vc))
+    mr = find(rows, "Month", ar, ac)[0]
+    months, last = [], None
+    for i in range(mr + 1, len(rows)):
+        cell = g(i, ac).strip()
+        if re.fullmatch(r"\d+", cell):
+            vals = [money(g(i, ac + k)) for k in range(1, 7)]
+            months.append({"m": int(cell), "begin": vals[0], "payment": vals[1], "interest": vals[2], "principal": vals[3], "end": vals[4], "paid": vals[5]})
+            last = i
+    block = {"startRow": ar + 1, "endRow": last + 1, "rows": rows[ar:last + 1]}
+
+    # "Common Extras": a reference list beside the setup items (not in any total).
+    extras = []
+    ce = find(rows, "Common Extras")
+    if ce:
+        for i in range(ce[0] + 1, ce[0] + 12):
+            lab, amt = g(i, ce[1]).strip(), money(g(i, ce[1] + 1))
+            if not lab:
+                break
+            extras.append({"label": lab, "amount": amt})
+
+    sheet = {"down": money(g(P["dp"][0], pc + 2)), "loan": money(g(P["loan"][0], pc + 2)), "closing": money(g(P["closing"][0], pc + 2)),
+             "setupTotal": money(g(P["setupTotal"][0], pc + 2)), "setupTotalList": setup_total_sheet, "oop": money(g(P["oop"][0], pc + 2)),
+             "opexMonthly": money(g(otr, oc + 1)), "cleaning": next((o["amount"] for o in opex if o.get("cleaning")), None),
+             "cases": cases, "taxes": T, "fiveYear": F, "mortgageYears": mortgageYears,
+             "amort": {"loan": a_loan, "rate": a_rate, "years": a_years, "months": len(months),
+                       "payment1": months[0]["payment"] if months else None,
+                       "paid12": months[11]["paid"] if len(months) >= 12 else None, "paid60": months[59]["paid"] if len(months) >= 60 else None,
+                       "paidLast": months[-1]["paid"] if months else None,
+                       "principal1": months[0]["principal"] if months else None, "principal2": months[1]["principal"] if len(months) > 1 else None,
+                       "paid2": months[1]["paid"] if len(months) > 1 else None}}
+    inputs = {"price": price, "dpPct": dpPct, "rate": rate, "closingPct": closingPct, "mortgageYears": mortgageYears, "amortYears": a_years,
+              "setup": [{"label": s["label"], "amount": s["amount"]} for s in setup],
+              "opex": [{k: o[k] for k in ("label", "amount", "note", "cleaning") if k in o} for o in opex],
+              "cleaningCost": cleaningCost, "cleaningTurns": cleaningTurns,
+              "revenue": {c: cases[c].get("revenue") for c in ("low", "mid", "high")},
+              "opexRangePct": rpar.get("opex"), "pmPct": rpar.get("pm"), "apprPct": rpar.get("appr"),
+              "landPct": T["landPct"], "slaPct": 0.35, "bonusPct": T["bonusPct"], "taxRate": T["taxRate"]}
+    return {"text": text, "md5": hashlib.md5(raw).hexdigest(), "notes": notes, "url": url, "preparedBy": prepared,
+            "inputs": inputs, "sheet": sheet, "comps": comps, "layout": lay, "issues": issues, "block": block, "extras": extras,
+            "setupRows": [s["row"] for s in setup], "opexRows": [o["row"] for o in opex]}
+
+
+def zkey(url):
+    p = urllib.parse.urlsplit(url.strip())
+    return (p.netloc.lower().replace("www.", "") + p.path.rstrip("/")).lower()
+
+
+def address_from_url(url):
+    path = urllib.parse.urlsplit(url).path
+    m = re.search(r"/homedetails/([^/]+)/(\d+)_zpid", path)
+    slug, zpid = (m.group(1), m.group(2)) if m else (path.strip("/").split("/")[-1], None)
+    tok = slug.split("-")
+    if len(tok) >= 4 and re.fullmatch(r"[A-Z]{2}", tok[-2]) and re.fullmatch(r"\d{5}", tok[-1]):
+        state, zp, rest = tok[-2], tok[-1], tok[:-2]
+    else:
+        state, zp, rest = "TX", None, tok
+    city = None
+    for c in CITIES:
+        ct = c.split(" ")
+        if [t.lower() for t in rest[-len(ct):]] == [t.lower() for t in ct]:
+            city, rest = c, rest[:-len(ct)]
+            break
+    if city is None and len(rest) > 1:
+        city, rest = rest[-1], rest[:-1]
+    st = []
+    for t in rest:  # Zillow writes "1/2" as "1-2"
+        if st and t == "2" and st[-1] == "1":
+            st[-1] = "1/2"
+        else:
+            st.append(t)
+    street = " ".join(st)
+    return {"slug": slug, "zpid": zpid, "street": street, "city": city, "state": state, "zip": zp,
+            "address": f"{street}, {city}, {state} {zp}".replace(" None", "")}
+
+
+# Geocoding (US Census), cached, with manual overrides.
+CACHE_P, OVR_P = DATA / "geocode_cache.json", DATA / "geocode_overrides.json"
+cache = json.loads(CACHE_P.read_text()) if CACHE_P.exists() else {}
+if not OVR_P.exists():
+    dump(OVR_P, {"_readme": "Manual pins, keyed by Zillow zpid: {\"27662294\": {\"lat\": 29.27, \"lng\": -94.83, \"note\": \"why\"}}. Overrides win over the geocoder.",
+                 "overrides": {}})
+overrides = json.loads(OVR_P.read_text()).get("overrides", {})
+
+
+def census(addr):
+    if addr in cache:
+        return cache[addr]
+    if OFFLINE:
+        return None
+    qs = urllib.parse.urlencode({"address": addr, "benchmark": "Public_AR_Current", "format": "json"})
+    try:
+        with urllib.request.urlopen("https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?" + qs, timeout=30) as resp:
+            js = json.load(resp)
+    except Exception as e:  # noqa: BLE001
+        print(f"  geocoder error for {addr!r}: {e}")
+        return None
+    time.sleep(0.4)
+    hits = js.get("result", {}).get("addressMatches", [])
+    if not hits:
+        return None
+    h = hits[0]
+    cache[addr] = {"lat": round(h["coordinates"]["y"], 6), "lng": round(h["coordinates"]["x"], 6), "matched": h["matchedAddress"], "nMatches": len(hits)}
+    return cache[addr]
+
+
+def geocode(a):
+    if a["zpid"] in overrides:
+        o = overrides[a["zpid"]]
+        return {"lat": o["lat"], "lng": o["lng"], "source": "override", "note": o.get("note"), "query": None, "matched": None}
+    variants = [a["address"]]
+    st = a["street"].split(" ")
+    for k in range(len(st) - 1, 1, -1):  # drop trailing unit / fraction tokens one at a time
+        variants.append(f"{' '.join(st[:k])}, {a['city']}, {a['state']} {a['zip']}")
+    for i, q in enumerate(dict.fromkeys(variants)):
+        hit = census(q)
+        if hit:
+            return {"lat": hit["lat"], "lng": hit["lng"], "source": "census", "query": q, "matched": hit["matched"],
+                    "approximate": i > 0, "nMatches": hit.get("nMatches", 1)}
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Read, group and validate
+# ---------------------------------------------------------------------------
+LIST = {x["id"]: x for x in listings}
+OTHER = set(other["room"].dropna())
+validation = {"missingComps": [], "changedComps": [], "duplicateProperties": [], "duplicateFiles": [], "mortgageYears": [],
+              "debtService": [], "sheetTotals": [], "geocode": [], "parse": [], "committed": []}
+
+
+def comp_status(c):
+    if not c["id"]:
+        return {"status": "unrecognised", "changes": []}
+    cur = LIST.get(c["id"])
+    if cur is None:
+        return {"status": "other-room" if c["id"] in OTHER else "missing", "changes": []}
+    ch = []
+
+    def cmp(field, old, new, tol):
+        if old is None or new is None or abs(float(old) - float(new)) > tol:
+            ch.append({"field": field, "sheet": old, "current": new})
+
+    cmp("revenue", c["revenue"], cur["revenue"], 0.51)
+    cmp("bedrooms", c["bedrooms"], cur["bedrooms"], 0.01)
+    cmp("sleeps", c["sleeps"], cur["sleeps"], 0.01)
+    cmp("adr", c["adr"], round(cur["adr"], 2), 0.006)
+    # Several sheets typed occupancy to one decimal (57.9 for 57.93): within 0.05 points is the same value.
+    cmp("occupancy", None if c["occupancy"] is None else round(c["occupancy"] * 100, 2), round(cur["occ"] * 100, 2), 0.051)
+    for f in SHEET_FLAGS:
+        cmp("HAS_" + f, c["flags"][f], int(f in cur["flags"]), 0)
+    return {"status": "changed" if ch else "match", "changes": ch}
+
+
+files = sorted(SRC.glob("*.csv"), key=lambda p: (int(re.search(r"- (\d+)", p.name).group(1)), p.name))
+groups = {}
+for p in files:
+    s = parse_sheet(p)
+    m = re.search(r"- (\d+)(?: \((\d+)\))?\.csv$", p.name)
+    s.update(file=p.name, number=int(m.group(1)), copy=int(m.group(2)) if m.group(2) else None)
+    for iss in s["issues"]:
+        validation["parse"].append({"file": p.name, "issue": iss})
+    groups.setdefault(zkey(s["url"]), []).append(s)
+
+properties, amort_out = [], {}
+for key, sheets in groups.items():
+    # Byte-identical files collapse into one version.
+    seen, versions = {}, []
+    for s in sheets:
+        if s["md5"] in seen:
+            seen[s["md5"]]["files"].append(s["file"])
+            validation["duplicateFiles"].append({"files": [seen[s["md5"]]["file"], s["file"]], "note": "byte-identical; shown once"})
+            continue
+        s["files"] = [s["file"]]
+        seen[s["md5"]] = s
+        versions.append(s)
+    nums = [v["number"] for v in versions]
+    for v in versions:
+        v["label"] = str(v["number"]) if nums.count(v["number"]) == 1 else f"{v['number']} ({v['copy'] or 1})"
+    versions.sort(key=lambda v: (v["number"], v["copy"] or 0))
+    default = versions[-1]
+    a = address_from_url(default["url"])
+    geo = geocode(a)
+    if geo is None:
+        validation["geocode"].append({"address": a["address"], "zpid": a["zpid"], "files": [f for v in versions for f in v["files"]],
+                                      "issue": "Census geocoder found no match; add a pin in data/geocode_overrides.json"})
+        loc = None
+    else:
+        if geo.get("approximate"):
+            validation["geocode"].append({"address": a["address"], "zpid": a["zpid"], "files": [f for v in versions for f in v["files"]],
+                                          "issue": f"matched only as '{geo['query']}' -> {geo['matched']}; check the pin"})
+        loc = place(geo["lat"], geo["lng"], default["notes"])
+    out_versions = []
+    for v in versions:
+        det = parse_notes(v["notes"])
+        comps = []
+        for c in v["comps"]:
+            st = comp_status(c)
+            comps.append({**c, **st})
+            if st["status"] in ("missing", "other-room", "unrecognised"):
+                validation["missingComps"].append({"file": v["label"], "address": a["street"], "row": c["row"], "id": c["id"], "url": c["url"],
+                                                   "status": st["status"], "revenue": c["revenue"], "bedrooms": c["bedrooms"]})
+            elif st["status"] == "changed":
+                validation["changedComps"].append({"file": v["label"], "address": a["street"], "row": c["row"], "id": c["id"], "changes": st["changes"]})
+        ids = [c["id"] for c in v["comps"] if c["id"]]
+        dup_ids = sorted({i for i in ids if ids.count(i) > 1})
+        checks = []
+        if dup_ids:
+            checks.append({"kind": "comp-duplicate", "text": "The same listing appears more than once in the comp table: " + ", ".join(dup_ids)})
+        sh, inp = v["sheet"], v["inputs"]
+        if sh["mortgageYears"] != sh["amort"]["years"]:
+            msg = (f"'Mortgage Years' says {sh['mortgageYears']:g} but the amortization block (and so Debt Service) uses "
+                   f"{sh['amort']['years']:g} years")
+            checks.append({"kind": "mortgage-years", "text": msg})
+            validation["mortgageYears"].append({"file": v["label"], "address": a["street"], "mortgageYears": sh["mortgageYears"], "amortYears": sh["amort"]["years"]})
+        rr = sh["amort"]["rate"] / 12
+        n = sh["amort"]["years"] * 12
+        pay = sh["amort"]["loan"] * rr / (1 - (1 + rr) ** -n)
+        ds = sh["cases"]["mid"]["ds"]
+        ds_issues = []
+        if abs(ds - 12 * pay) > 1:
+            ds_issues.append(f"Debt Service ${ds:,.0f} vs 12 x the block's payment ${12 * pay:,.0f}")
+        if abs(sh["amort"]["loan"] - sh["loan"]) > 1:
+            ds_issues.append(f"block loan ${sh['amort']['loan']:,.0f} vs sheet loan ${sh['loan']:,.0f}")
+        if abs(sh["amort"]["rate"] - inp["rate"]) > 1e-9:
+            ds_issues.append(f"block rate {sh['amort']['rate']:.2%} vs sheet rate {inp['rate']:.2%}")
+        # True principal repaid (reporting only; the block itself is stored verbatim and never edited).
+        bal, cum = sh["amort"]["loan"], []
+        for _ in range(60):
+            pr = pay - bal * rr
+            bal -= pr
+            cum.append((cum[-1] if cum else 0) + pr)
+        excess = (sh["amort"]["paid12"] or 0) - cum[11]
+        sheet_p = sh["cases"]["mid"]["principal"]
+        if abs(excess) > 1 and abs(sheet_p - sh["amort"]["paid12"]) <= 1:
+            ds_issues.append(
+                f"the block's Total Paydown column runs ${excess:,.2f} ahead of the principal actually repaid, from its month-2 row on "
+                f"(${sh['amort']['paid2']:,.0f} where ${sh['amort']['principal1']:,.0f} + ${sh['amort']['principal2']:,.0f} were repaid; it ends at "
+                f"${sh['amort']['paidLast']:,.0f} on a ${sh['amort']['loan']:,.0f} loan). Principal Pay Down (${sheet_p:,.0f}) reads that column; "
+                f"year-1 principal is ${cum[11]:,.0f}. 5-year Equity (${sh['fiveYear']['equity']:,.0f}) uses the correct figure (${cum[59]:,.0f}).")
+        elif sheet_p is not None and abs(sheet_p - cum[11]) > 1:
+            ds_issues.append(f"Principal Pay Down ${sheet_p:,.0f} vs the principal actually repaid in year 1, ${cum[11]:,.0f}")
+        for t in ds_issues:
+            checks.append({"kind": "debt-service", "text": t})
+            validation["debtService"].append({"file": v["label"], "address": a["street"], "issue": t})
+        setup_sum = sum(s["amount"] or 0 for s in inp["setup"])
+        tot = []
+        if abs(setup_sum - (sh["setupTotalList"] or 0)) > 0.5:
+            tot.append(f"setup items add to ${setup_sum:,.0f}, the list's Total says ${sh['setupTotalList']:,.0f}")
+        if abs((sh["setupTotalList"] or 0) - (sh["setupTotal"] or 0)) > 0.5:
+            tot.append(f"Renovation / Amenities / Furniture ${sh['setupTotal']:,.0f} vs setup Total ${sh['setupTotalList']:,.0f}")
+        clean = (inp["cleaningCost"] or 0) * (inp["cleaningTurns"] or 0)
+        opex_sum = sum((clean if o.get("cleaning") else (o["amount"] or 0)) for o in inp["opex"])
+        if abs(opex_sum - sh["opexMonthly"]) > 0.5:
+            tot.append(f"OPEX items add to ${opex_sum:,.2f}/mo, the sheet's total says ${sh['opexMonthly']:,.0f} (a cell shows a rounded value)")
+        if sh["cleaning"] is not None and abs(clean - sh["cleaning"]) > 0.5:
+            tot.append(f"Cleaning ${sh['cleaning']:,.0f}/mo vs cost per clean x turns ${clean:,.2f}")
+        for t in tot:
+            checks.append({"kind": "totals", "text": t})
+            validation["sheetTotals"].append({"file": v["label"], "address": a["street"], "issue": t})
+        for iss in v["issues"]:
+            checks.append({"kind": "parse", "text": iss})
+        amort_out[v["file"]] = v["block"]
+        out_versions.append({
+            "label": v["label"], "number": v["number"], "file": v["file"], "files": v["files"], "md5": v["md5"],
+            "notes": v["notes"], "preparedBy": v["preparedBy"], "url": v["url"], "details": det,
+            "inputs": inp, "sheet": sh, "comps": comps, "layout": v["layout"], "checks": checks, "extras": v["extras"],
+            "amortRows": [v["block"]["startRow"], v["block"]["endRow"]],
+        })
+    properties.append({"id": a["zpid"] or hashlib.md5(key.encode()).hexdigest()[:10], "key": key, "kind": "underwritten",
+                       "url": default["url"].split("?")[0], "address": a["address"], "street": a["street"], "city": a["city"],
+                       "zip": a["zip"], "geo": geo, "place": loc, "versions": out_versions, "defaultVersion": default["label"]})
+
+# Possible duplicates: identical projected bed/bath, lot and size under different addresses.
+seen = {}
+for p in properties:
+    for v in p["versions"]:
+        d = v["details"]
+        sig = (d["beds"], d["baths"], d["lot"], d["size"])
+        if None in sig:
+            continue
+        seen.setdefault(sig, []).append((p, v))
+for sig, hits in seen.items():
+    addrs = {p["id"] for p, _ in hits}
+    if len(addrs) > 1:
+        validation["duplicateProperties"].append({
+            "details": {"beds": sig[0], "baths": sig[1], "lot": sig[2], "size": sig[3]},
+            "properties": [{"id": p["id"], "address": p["street"], "file": v["label"], "price": v["inputs"]["price"]} for p, v in hits]})
+dupe_ids = {x["id"] for d in validation["duplicateProperties"] for x in d["properties"]}
+for p in properties:
+    for v in p["versions"]:
+        if p["id"] in dupe_ids:
+            others = [x for d in validation["duplicateProperties"] if any(y["id"] == p["id"] for y in d["properties"]) for x in d["properties"] if x["id"] != p["id"]]
+            v["checks"].append({"kind": "duplicate", "text": "Same bed/bath, lot and size as " + "; ".join(f"{x['address']} (file {x['file']})" for x in others) +
+                                ". Possibly the same house under two addresses, or details copied from another sheet."})
+
+# Order: Town -> West End along the island, as the main page orders its areas.
+order = {a: i for i, a in enumerate(mc.AREA_SHORT[x] for x in mc.AREA_ORDER)}
+properties.sort(key=lambda p: (order.get((p["place"] or {}).get("area"), 99), p["street"]))
+
+# Committed browser edits / new listings (exported from the page, committed by hand).
+LOCAL_P = DATA / "underwritten_local.json"
+committed = {"listings": [], "edits": {}}
+if LOCAL_P.exists():
+    loc_js = json.loads(LOCAL_P.read_text())
+    keys = {p["key"]: p["id"] for p in properties}
+    for li in loc_js.get("listings", []):
+        k = zkey(li.get("url", "")) if li.get("url") else None
+        if k and k in keys:
+            validation["committed"].append({"id": li.get("id"), "issue": f"{li.get('address')} is now a source CSV; the committed copy is skipped"})
+            continue
+        for c in li.get("comps", []):
+            st = comp_status({**c, "flags": c.get("flags", {f: 0 for f in SHEET_FLAGS})})
+            if st["status"] != "match":
+                validation["committed"].append({"id": li.get("id"), "issue": f"comp {c.get('id')} {st['status']}"})
+        committed["listings"].append(li)
+    pids = {p["id"] for p in properties}
+    for pid, ed in (loc_js.get("edits") or {}).items():
+        if pid not in pids:
+            validation["committed"].append({"id": pid, "issue": "edit for a property that is no longer in source_csv; skipped"})
+            continue
+        committed["edits"][pid] = ed
+
+dump(DATA / "underwritten.json", {
+    "generatedFrom": {"csvFolder": "underwriting/source_csv", "files": [p.name for p in files], "workbook": mc.XLSX.name, "snapshot": mc.SNAPSHOT,
+                      "local": LOCAL_P.name if LOCAL_P.exists() else None},
+    "compHeader": COMP_HEADER, "sheetFlags": SHEET_FLAGS, "templateFile": "New Market UW'ing - 101.csv",
+    "rules": {"area": "vote of the 3 nearest Airbnb listings (reproduces the main page's Ward areas for 100% of listings, leave-one-out)",
+              "loc": "same thresholds as the listings: Gulf-front within 0.2 km of the Gulf shoreline (0.8 km if the notes say beachfront), beach walk within 0.6 km, "
+                     "bay / canal if the notes say canal / bayfront / waterfront, else inland",
+              "geocode": "US Census geocoder (address-range interpolation along the street), overrides in data/geocode_overrides.json"},
+    "properties": properties, "validation": validation, "committed": committed,
+})
+dump(DATA / "amortization.json", amort_out)
+CACHE_P.write_text(json.dumps(dict(sorted(cache.items())), ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Report
+# ---------------------------------------------------------------------------
+def money_s(x):
+    return "—" if x is None else f"${x:,.0f}"
+
+
+print(f"comps.json: {len(listings)} entire homes (of {len(allc)} cleaned; {len(other)} private/hotel rooms left out). "
+      f"{sum(x['revenue'] >= 90000 for x in listings)} earn $90k+.")
+print(f"shoreline.json: {len(G)} Gulf shoreline points, display line {len(line)} points")
+print(f"underwritten.json: {len(properties)} properties, {sum(len(p['versions']) for p in properties)} versions from {len(files)} files")
+for p in properties:
+    pl = p["place"] or {}
+    g_ = p["geo"] or {}
+    print(f"  {p['street']:<28} {', '.join(v['label'] for v in p['versions']):<10} {pl.get('areaName', '?'):<24} {pl.get('loc', '?'):<12} "
+          f"{pl.get('beachKm', float('nan')):.2f} km  geocode: {g_.get('source', 'FAILED')}{' (approx)' if g_.get('approximate') else ''}")
+V = validation
+print("\nVALIDATION REPORT")
+print(f"- Comps not in the current entire-home data ({len(V['missingComps'])}):")
+for x in V["missingComps"]:
+    print(f"    file {x['file']} row {x['row']} ({x['address']}): {x['id']} {x['status']} (sheet: {money_s(x['revenue'])}, {x['bedrooms']:g}BR)")
+print(f"- Comps whose current values differ from the sheet ({len(V['changedComps'])}):")
+for x in V["changedComps"]:
+    ch = "; ".join(f"{c['field']} {c['sheet']} -> {c['current']}" for c in x["changes"])
+    print(f"    file {x['file']} row {x['row']} ({x['address']}): {x['id']}: {ch}")
+print(f"- Possible duplicate properties ({len(V['duplicateProperties'])}):")
+for d in V["duplicateProperties"]:
+    print("    " + " and ".join(f"{x['address']} (file {x['file']}, {money_s(x['price'])})" for x in d["properties"]) +
+          f": same {d['details']['beds']:g} / {d['details']['baths']:g} bed/bath, lot {d['details']['lot']:,.0f}, size {d['details']['size']:,.0f} sqft")
+print(f"- Duplicate files ({len(V['duplicateFiles'])}): " + "; ".join(" = ".join(d["files"]) for d in V["duplicateFiles"]))
+print(f"- Mortgage Years differs from Amortization Years ({len(V['mortgageYears'])}): " +
+      ", ".join(f"{x['file']} ({x['mortgageYears']:g} vs {x['amortYears']:g})" for x in V["mortgageYears"]))
+print(f"- Debt service / amortization disagreements ({len(V['debtService'])}):")
+for x in V["debtService"]:
+    print(f"    file {x['file']} ({x['address']}): {x['issue']}")
+print(f"- Sheet totals that don't add up from the displayed cells ({len(V['sheetTotals'])}):")
+for x in V["sheetTotals"]:
+    print(f"    file {x['file']} ({x['address']}): {x['issue']}")
+print(f"- Geocoding ({len(V['geocode'])}):")
+for x in V["geocode"]:
+    print(f"    {x['address']}: {x['issue']}")
+for k in ("parse", "committed"):
+    if V[k]:
+        print(f"- {k}: {V[k]}")
+
+if shutil.which("node"):
+    print(flush=True)
+    rc = subprocess.call(["node", str(ROOT / "tests" / "test_underwritten.mjs")], cwd=ROOT)
+    if rc:
+        sys.exit(rc)
+else:
+    print("\n(node not found: run tests/test_underwritten.mjs for the formula and export tests)")

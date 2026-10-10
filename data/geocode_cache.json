@@ -1,0 +1,62 @@
+{
+ "10419 Stewart Rd, Galveston, TX 77554": {
+  "lat": 29.250874,
+  "lng": -94.871192,
+  "matched": "10419 STEWART RD, GALVESTON, TX, 77554",
+  "nMatches": 1
+ },
+ "11706 Opihi, Galveston, TX 77554": {
+  "lat": 29.229903,
+  "lng": -94.894359,
+  "matched": "11706 OPIHI CR, GALVESTON, TX, 77554",
+  "nMatches": 1
+ },
+ "13414 Binnacle Way, Galveston, TX 77554": {
+  "lat": 29.216013,
+  "lng": -94.93292,
+  "matched": "13414 BINNACLE WAY, GALVESTON, TX, 77554",
+  "nMatches": 1
+ },
+ "16538 Jean Lafitte Rd, Jamaica Beach, TX 77554": {
+  "lat": 29.186383,
+  "lng": -94.973583,
+  "matched": "16538 JEAN LAFITTE RD, JAMAICA BEACH, TX, 77554",
+  "nMatches": 1
+ },
+ "16643 Bermuda Way, Jamaica Beach, TX 77554": {
+  "lat": 29.190668,
+  "lng": -94.980127,
+  "matched": "16643 BERMUDA WAY, JAMAICA BEACH, TX, 77554",
+  "nMatches": 1
+ },
+ "2413 Gerol Dr, Galveston, TX 77551": {
+  "lat": 29.269275,
+  "lng": -94.845105,
+  "matched": "2413 GEROL DR, GALVESTON, TX, 77551",
+  "nMatches": 1
+ },
+ "2915 Avenue N 1/2 1/2, Galveston, TX 77550": {
+  "lat": 29.292875,
+  "lng": -94.797332,
+  "matched": "2915 AVE N 1/2, GALVESTON, TX, 77550",
+  "nMatches": 1
+ },
+ "5 Colony Park Cir, Galveston, TX 77551": {
+  "lat": 29.268103,
+  "lng": -94.837701,
+  "matched": "5 COLONY PARK CIR, GALVESTON, TX, 77551",
+  "nMatches": 1
+ },
+ "5525 Ibis Dr, Galveston, TX 77551": {
+  "lat": 29.27185,
+  "lng": -94.822788,
+  "matched": "5525 IBIS DR, GALVESTON, TX, 77551",
+  "nMatches": 1
+ },
+ "6513 Golf Crest Dr, Galveston, TX 77551": {
+  "lat": 29.270887,
+  "lng": -94.833522,
+  "matched": "6513 GOLF CREST DR, GALVESTON, TX, 77551",
+  "nMatches": 1
+ }
+}
