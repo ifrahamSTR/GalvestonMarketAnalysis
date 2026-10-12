@@ -1,6 +1,8 @@
 # Galveston, TX — STR Market & Location Analysis
 
-Static site (no build step), same template as the Park City and Charlotte market sites. It covers **Sections 2–5 only**: Market, Location Analysis by Bedroom Size, Why Location Changes the Rate, and Traveller Demographics. **No buy boxes yet.**
+Static site (no build step), same template as the Park City and Charlotte market sites. It covers **Sections 2–6**: Market, Location Analysis by Bedroom Size, Why Location Changes the Rate, Traveller Demographics and STR Regulations. **No buy boxes yet.**
+
+**STR Regulations (Section 6)** follows the Charlotte site's layout: the City of Galveston first, then Jamaica Beach (a separate city on the West End) with only what differs. Content is `STR_REGULATIONS` in `js/data.js`, rendered by `js/regulations.js` with `css/regulations.css` (the shared template files are unchanged). Checked 2026-10-12 against Galveston City Code Ch. 19 Art. VI (Ord. 25-060), Jamaica Beach Ord. 2026-01 and the May 2026 federal court order; sources are linked on the page. The "applies to" counts come from testing the 923 homes and the targets against the Census city boundaries (76 homes in Jamaica Beach), and the R-0 warning from the City's "Short Term Rental R-0 Zoning Restricted Areas" map layer.
 
 ## Pipeline
 

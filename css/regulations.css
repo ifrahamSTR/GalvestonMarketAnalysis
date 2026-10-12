@@ -1,0 +1,42 @@
+/* Section 6, STR regulations (Galveston's own file; the shared styles.css
+   already carries the Charlotte site's regs-card / dd-row rules and the
+   moderate tier pill). Adds the per-city heading, the "applies to" line,
+   the Jamaica Beach difference table and linked sources. */
+.regs-city { margin-top: 22px; }
+.regs-city + .regs-city { margin-top: 34px; padding-top: 26px; border-top: var(--hairline); }
+.regs-city__head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 6px; }
+.regs-city__name { margin: 0; font-size: 1.3rem; }
+.regs-city__badge { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); background: #eef0ef; border-radius: 999px; padding: 2px 8px; }
+.regs-city__applies { margin: 0 0 14px; font-size: 0.92rem; max-width: 900px; }
+.regs-city__applies strong { color: var(--color-primary); }
+
+.regs-alert { margin: 0 0 16px; max-width: 900px; }
+.regs-card__sources a, .regs-note a { color: var(--color-text-muted); }
+.regs-card__sources a:hover, .regs-note a:hover { color: var(--color-primary); }
+.regs-note { margin-top: 22px; }
+
+/* Jamaica Beach vs Galveston: the Jamaica Beach column carries the
+   difference, so it gets the accent tint; Galveston's value is the
+   muted reference. */
+.regs-diff { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+.regs-diff th, .regs-diff td { text-align: left; vertical-align: top; padding: 8px 12px; border-bottom: var(--hairline); }
+.regs-diff tbody tr:last-child th, .regs-diff tbody tr:last-child td { border-bottom: none; }
+.regs-diff thead th { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); padding-top: 0; }
+.regs-diff thead th:nth-child(2) { color: var(--brand-gold-dark); }
+.regs-diff tbody th { width: 20%; font-weight: 600; color: var(--color-primary); }
+.regs-diff__jb { width: 42%; color: var(--color-text); background: var(--accent-tint); }
+.regs-diff__gal { color: var(--color-text-muted); }
+.regs-diff strong { color: var(--color-primary); font-weight: 600; }
+
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+@media (max-width: 600px) {
+  .regs-diff thead { display: none; }
+  .regs-diff, .regs-diff tbody, .regs-diff tr, .regs-diff th, .regs-diff td, .regs-diff tbody th { display: block; width: auto; }
+  .regs-diff tr { padding: 10px 0; border-bottom: var(--hairline); }
+  .regs-diff tbody tr:last-child { border-bottom: none; }
+  .regs-diff th, .regs-diff td { border-bottom: none; padding: 2px 0; }
+  .regs-diff__jb { background: none; }
+  .regs-diff td::before { content: attr(data-label) ": "; font-weight: 600; color: var(--color-text-muted); }
+  .regs-diff__jb::before { color: var(--brand-gold-dark); }
+}

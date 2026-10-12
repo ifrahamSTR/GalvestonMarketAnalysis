@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" />
 <link rel="stylesheet" href="css/styles.css?v=20261007-m7" />
 <link rel="stylesheet" href="css/uw-strip.css?v=20261011-uw4" />
+<link rel="stylesheet" href="css/regulations.css?v=20261012-r1" />
 </head>
 <body>
 
@@ -25,6 +26,7 @@
       <a href="#location">Location</a>
       <a href="#destinations">Why Here</a>
       <a href="#demographics">Demographics</a>
+      <a href="#regulations">Regulations</a>
     </nav>
   </div>
 </header>
@@ -147,6 +149,19 @@
     </div>
   </section>
 
+  <!-- Section 6: STR regulations, laid out like the Charlotte site's. Two
+       cities share the island: the City of Galveston first, then Jamaica
+       Beach with only what differs. Content: STR_REGULATIONS in js/data.js;
+       rendered by js/regulations.js. -->
+  <section id="regulations" class="section">
+    <div class="container">
+      <p class="section-kicker">Section 6</p>
+      <h2>STR Regulations</h2>
+      <p id="regs-lede" class="subsection-lede"></p>
+      <div id="regulations-body"></div>
+    </div>
+  </section>
+
 </main>
 
 <footer class="site-footer">
@@ -168,10 +183,11 @@
 <script src="js/region_data.js?v=20261007-m7"></script>
 <script src="js/render.js?v=20261007-m7"></script>
 <script src="js/location.js?v=20261007-m7"></script>
-<script src="js/data.js?v=20261007-m7"></script>
+<script src="js/data.js?v=20261012-r1"></script>
 <script src="js/destination.js?v=20261007-m7"></script>
 <script src="js/charts.js?v=20261007-m7"></script>
 <script src="js/main.js?v=20261007-m7"></script>
+<script src="js/regulations.js?v=20261012-r1"></script>
 <script src="js/underwritten/uw-math.js?v=20261011-uw4"></script>
 <script src="js/underwritten/uw-strip.js?v=20261011-uw4"></script>
 </body>

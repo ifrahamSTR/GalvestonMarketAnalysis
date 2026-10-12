@@ -191,7 +191,7 @@ const MARKET_OVERVIEW = {
     "🌀 <strong>Hurricane season overlaps the peak (June–November).</strong> Hurricane Beryl (July 2024) cut the city's July hotel-tax revenue by 38%. No hurricane has hit Galveston since; a direct hit in peak season would pull a year well below these figures.",
     "🌿 <strong>Sargassum seaweed</strong> was heavy in spring and summer in both 2025 and 2026; the Park Board clears the town beaches ahead of Memorial Day.",
     "🏨 <strong>Hotels softened in 2025</strong> (occupancy fell from about 58% to 52% while their rates rose), and the city's hotel-tax take came in about $1.75M under plan for FY2025. Airbnb revenue rose over the same period.",
-    "📋 <strong>The rules changed in late 2025.</strong> The City took over STR registration from the Park Board and adopted an updated ordinance ($250 annual license; registration number required on every listing). Jamaica Beach is a separate city with its own registration.",
+    "📋 <strong>The rules changed in late 2025.</strong> The City took over STR registration from the Park Board and adopted an updated ordinance ($250 annual license; registration number required on every listing). Jamaica Beach is a separate city with its own, stricter rules. <a href=\"#regulations\">See STR Regulations</a>.",
   ],
   sources: [
     { label: "Park Board / Tourism Economics (2025 impact)", url: "https://www.galvestonparkboard.org/DocumentCenter/View/3458/Galveston-Tourism-Economic-Impact---2025---CLIENT-FINAL" },
@@ -299,3 +299,90 @@ const DEST_SOURCES = [
   { label: "Visit Galveston (Lone Star Rally)", url: "https://www.visitgalveston.com/events/annual-events/lone-star-rally/" },
   { label: "City of Galveston (STRs by district)", url: "https://galvestontx.gov/DocumentCenter/View/21222/STR-Count-October-1-2025-Source-Rentalscape" },
 ];
+
+// ---------------------------------------------------------------------------
+// Section 6 — STR regulations (rendered by js/regulations.js). Same layout as
+// the Charlotte site's Regulations section. Two cities share the island: the
+// City of Galveston first, then Jamaica Beach with only what differs.
+// Checked 2026-10-12 against Galveston City Code Ch. 19 Art. VI (Ord. 25-060,
+// Nov 13 2025; no later amendment in Municode Supp. 153), the City's STR and
+// hotel-tax pages, Jamaica Beach Ord. 2026-01 (Jan 8 2026), its STR and HOT
+// pages, and the May 1 2026 order in Jamaica Beach STR Ass'n v. City of
+// Jamaica Beach (S.D. Tex. 3:26-cv-31).
+// Where each city applies: the 923 homes and the targets tested against the
+// Census TIGER city boundaries (OpenStreetMap's agree exactly): 76 homes in
+// Jamaica Beach, all in the "Jamaica & Indian Beach" area (76 of its 113),
+// and 847 in the City of Galveston. R-0 areas: the City's published layer
+// "Short Term Rental R-0 Zoning Restricted Areas" (13 areas).
+// ---------------------------------------------------------------------------
+const JB_HOMES = 76, JB_AREA_HOMES = 113;
+const STR_REGULATIONS = {
+  lede: "Two cities share the island, and the rules follow the city line: the City of Galveston covers everything except Jamaica Beach, a small separate city on the West End with its own, stricter rules.",
+  galveston: {
+    name: "City of Galveston",
+    badge: "Most of the island",
+    appliesTo: "<strong>Applies to</strong> the whole island except Jamaica Beach: town, the Seawall and the West End to San Luis Pass, including Indian Beach, Pirates Beach and Sea Isle. That's " + (MARKET_STATS.n - JB_HOMES) + " of the " + MARKET_STATS.n + " homes in this analysis and 9 of the 11 underwritten targets.",
+    alert: "⚠️ <strong>Two underwritten targets sit in R-0 zones, where new STRs aren't allowed:</strong> 5 Colony Park Cir (Colony Park) and 6513 Golf Crest Dr (Golfcrest). Check the City's registered-STR list before counting on STR income there. 5525 Ibis Dr is about 70 m from the Westwood R-0 line, so confirm its parcel's zoning too.",
+    tier: "Investor-Friendly, with a License",
+    tierKey: "friendly",
+    tierNote: "STRs are allowed across most of the city with an annual license: no cap, no primary-residence rule and no occupancy formula. The City took over licensing and hotel tax from the Park Board on October 1, 2025, and rewrote the rules in November 2025 (Ordinance 25-060).",
+    permitResidency: [
+      "License required? Yes — $250 a year per unit, January to December, renewed by December 31 ($500 late fee). Not prorated or refundable.",
+      "Primary residence required? No — investor-owned STRs are allowed. The owner names an operator and a 24/7 local contact.",
+      "The license doesn't transfer: a buyer registers again and gets a new registration (GVR) number.",
+    ],
+    operatingLimits: [
+      "No cap, waitlist or moratorium. No occupancy formula or parking minimum: you post your own maximum occupancy inside.",
+      "Local contact must respond within 1 hour and resolve a complaint within 2 hours (City STR hotline 409-247-8160).",
+      "Post inside: maximum occupancy, parking rules, quiet hours (10 p.m.–7 a.m.), the local contact, flood and evacuation information.",
+      "Taxes: 15% hotel occupancy tax — 6% Texas + 9% City. No sales tax on the stay.",
+      "Penalties: up to $500 per offense per day ($2,000 for fire, health or zoning). 3 violations in 12 months can cost the license for up to 6 months; repeats, permanently.",
+    ],
+    investorNotes: [
+      "<strong>Check the zoning first.</strong> STRs are prohibited in R-0 neighborhoods: Colony Park, Cedar Lawn, Westwood, Pirates Cove – Lafitte's Point, Denver, Golfcrest, Trimble & Lindsey, Airport Homesites, Havre Lafitte, Clara Barton, 2712–2928 11 Mile Rd, Harbor View and Barracuda. A home registered before its area was rezoned keeps its right only if it never goes 365 days unregistered or unused.",
+      "Every ad must show the City registration number; each day without it is a separate offense, and platforms delist on the City's notice.",
+      "Airbnb and Vrbo collect and remit both the state and City tax on their bookings. You still file a City report (zero-dollar if need be) by the 20th, and pay the tax yourself on direct bookings.",
+      "West End beachfront: no building in the dune conservation area, and no in-ground pool outside the house footprint seaward of the first road parallel to the beach (or within 1,000 ft of the tide line).",
+      "Renovations and additions need a Texas windstorm certificate (WPI-8) to stay insurable with TWIA. HOA deed restrictions still apply with a City license.",
+      "The City planned to review 2026 data and the $250 fee in fall 2026, so expect possible changes for 2027.",
+    ],
+    sources: [
+      { label: "STR ordinance 25-060", url: "https://www.galvestontx.gov/DocumentCenter/View/21295" },
+      { label: "City Code Ch. 19, Art. VI", url: "https://library.municode.com/tx/galveston/codes/code_of_ordinances?nodeId=PTIICOCI_CH19LIPEBURE_ARTVISHRMRE" },
+      { label: "City STR FAQ", url: "https://www.galvestontx.gov/1433/Frequently-Asked-Questions" },
+      { label: "R-0 restricted areas (STR owner page)", url: "https://galvestontx.gov/1182/Short-term-rental-owner" },
+      { label: "City hotel tax filing", url: "https://www.galvestontx.gov/1425/Online-Reporting-and-Paying-Service" },
+      { label: "Dune and beach plan (GLO)", url: "https://glo.texas.gov/sites/default/files/2025-02/City%20of%20Galveston.pdf" },
+      { label: "TWIA windstorm certificates", url: "https://www.twia.org/windstorm-certification/" },
+    ],
+  },
+  jamaicaBeach: {
+    name: "Jamaica Beach",
+    badge: "Separate city · West End",
+    appliesTo: "<strong>Applies to</strong> homes inside Jamaica Beach city limits, about 1.4 miles of the West End between Galveston Island State Park and Indian Beach: " + JB_HOMES + " of the " + MARKET_STATS.n + " homes (" + Math.round((JB_HOMES / MARKET_STATS.n) * 100) + "%; " + JB_HOMES + " of the " + JB_AREA_HOMES + " in the Jamaica & Indian Beach area) and 2 underwritten targets, <strong>16538 Jean Lafitte Rd</strong> and <strong>16643 Bermuda Way</strong>. ZIP 77554 covers both cities, so check the city limits, not the mailing address.",
+    tier: "Moderate, Stricter than Galveston",
+    tierKey: "moderate",
+    tierNote: "STRs are allowed with an annual city registration, but the January 2026 ordinance (2026-01) is much stricter than Galveston's: a 12-guest cap, $1M liability insurance, strike-based suspensions and no bookings during disaster declarations. Part of it is being challenged in federal court.",
+    differences: [
+      { topic: "Guests", jb: "<strong>12 maximum</strong>, whatever the size: 2 per qualified bedroom + 4, or 1 per 150 sq ft above flood level, whichever is lower. Ads can't claim more.", gal: "No cap or formula; you post your own maximum." },
+      { topic: "Ground floor", jb: "Rooms below the FEMA base flood elevation don't count. A federal court paused this in May 2026, but only for members of the suing STR association; the case runs into 2027.", gal: "No such rule." },
+      { topic: "Insurance", jb: "<strong>$1M</strong> general liability policy required to register.", gal: "Not required." },
+      { topic: "Fees", jb: "$250 application (new) + $250 a year; renew by January 31; one registration per property.", gal: "$250 a year per unit; renew by December 31." },
+      { topic: "Local contact", jb: "Must live or have an office in Galveston County and be <strong>on site within 1 hour</strong>.", gal: "Must respond within 1 hour, in person or by phone." },
+      { topic: "Enforcement", jb: "A guest's police citation is an instant strike. 3 strikes in 12 months = 6-month suspension; a revocation bars the property for good.", gal: "3 violations in 12 months can suspend the license (up to 6 months; permanent on repeat)." },
+      { topic: "Storms", jb: "No new bookings during a disaster declaration; STRs must empty under a mandatory evacuation.", gal: "No booking ban." },
+    ],
+    same: [
+      "No cap on the number of STRs and no primary-residence rule; the registration number goes on every listing; HOA rules still apply.",
+      "Hotel tax is 15% (6% state + 9% city). Airbnb and Vrbo collect it, but you still file a city report every quarter, through the city's MyGov portal.",
+    ],
+    sources: [
+      { label: "Ordinance 2026-01", url: "https://www.jamaicabeachtx.gov/DocumentCenter/View/1492" },
+      { label: "City STR page", url: "https://www.jamaicabeachtx.gov/339/Short-Term-Rental" },
+      { label: "2026 registration instructions", url: "https://www.jamaicabeachtx.gov/DocumentCenter/View/1505/STR-Registration-Instructions-2026" },
+      { label: "Hotel tax (quarterly)", url: "https://www.jamaicabeachtx.gov/274/Pay-Hotel-Occupancy-Tax-HOT-Quarterly" },
+      { label: "Court order, May 1 2026", url: "https://storage.courtlistener.com/recap/gov.uscourts.txsd.2059064/gov.uscourts.txsd.2059064.28.0.pdf" },
+    ],
+  },
+  note: "Checked October 12, 2026 against each city's code, ordinances and tax pages. City limits from the U.S. Census boundary; R-0 areas from the City of Galveston's published map. Rules change, so confirm with the city before you buy.",
+};
