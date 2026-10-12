@@ -344,7 +344,7 @@
     else if (act === "pool-reset") { UW.ui.amRules.pool = null; UW.emit("near"); }
     else if (act === "unpure") UW.pureNearest(false);
     else if (act === "more") { UW.ui.n = Math.min(UW.listings.length, UW.ui.n + 50); UW.writeHash(); UW.emit("near"); }
-    else if (act === "card-profile" && p) { UW.actions.openCard(p.id); UW.afterPointer(() => setTimeout(() => { const n = document.getElementById("uw-profile-" + p.id); if (n) n.scrollIntoView({ behavior: "smooth", block: "center" }); }, 300)); }
+    else if (act === "card-profile" && p) { UW.actions.openCard(p.id, "profile"); UW.afterPointer(() => setTimeout(() => { const n = document.getElementById("uw-profile-" + p.id); if (n) n.scrollIntoView({ behavior: "smooth", block: "center" }); }, 300)); }
     else if (act === "add-listing") UW.addApi.open();
     else if (act === "step" && p) { const all = UW.properties(), i = all.findIndex((x) => x.id === p.id); UW.select(all[(i + +b.dataset.v + all.length) % all.length].id, { from: "panel" }); }
     else if (act === "pure") UW.pureNearest(true);

@@ -73,6 +73,7 @@ A second page that puts the underwriting sheets on one map with the Airbnb comps
    - that every copy output is revenue-descending, and that map, popup and card copies give identical lines;
    - error badges, removing flagged comps, copy warnings and the scenario tools;
    - the target profile (toggles, "manual", "Reset to sheet"), both matching modes with their own filters, the target popup's buttons, adding from both modes (one row, tagged Both), the Match column filter and "Append distance to notes";
+   - the Sheet tab: every scenario's CSV drawn cell for cell, and an in-sheet edit that recalculates in place and downloads the same way;
    - no console errors.
 
 The script is idempotent: the same inputs give byte-identical outputs. It never edits a sheet value. Mismatches are reported, on the page and in the console.
@@ -96,6 +97,8 @@ The script is idempotent: the same inputs give byte-identical outputs. It never 
 - 5-year: 5 × Mid FCF + principal through month 60 + 5 × appreciation.
 
 Existing targets show the sheet's own numbers. The page recalculates only once a financial input is edited.
+
+**Expanded cards open on the Sheet tab** (`js/underwritten/uw-sheet.js`): the scenario's own CSV drawn as the Google Sheet it came from, with all 22 columns (A–V), every row including the amortization block, and every cell exactly as the CSV has it (the browser test compares all 12 scenarios cell for cell). Yellow cells are inputs, edited in place: price, down payment %, rate, closing %, the setup list, OPEX, cleaning cost and turns, Low / Mid / High revenue and the analyst notes. The calculated cells recalculate as you type, and Download UW CSV writes the same cells. Setup items keep their own sheet rows (`UWCsv.placeSetup`), so an unchanged export is byte-identical to the source. The comp set, target profile, property & pin, scenarios and data checks are on the card's other tabs.
 
 **Comps on the page.**
 - **Comp tables** in every card and scenario show the sheet's 15 columns in the sheet's order:
@@ -136,7 +139,7 @@ One sheet error is reported and left as is. The amortization block's "Total Payd
 - `js/underwritten/`:
   - `uw-math.js`, `uw-csv.js` and `uw-geo.js` run in the browser and in Node.
   - `uw-rules.js` (comp classes, auto notes, comp rows, notes parsing, target profile, both matching modes) also runs in both.
-  - `uw-app.js` (state, filters, hash), `uw-map.js` (canvas map, target popups), `uw-actions.js` (copy / download / add / remove, shared by cards, popups and the panel), `uw-panel.js`, `uw-cards.js`, `uw-add.js`, `uw-checks.js` (comp audit), `uw-main.js`.
+  - `uw-app.js` (state, filters, hash), `uw-map.js` (canvas map, target popups), `uw-actions.js` (copy / download / add / remove, shared by cards, popups and the panel), `uw-panel.js`, `uw-sheet.js` (the Sheet tab), `uw-cards.js`, `uw-add.js`, `uw-checks.js` (comp audit), `uw-main.js`.
 - `scripts/build_underwritten.py`, `tests/test_underwritten.mjs` and `tests/test_underwritten_browser.mjs`.
 - `data/version_labels.json`, `reports/comp_audit.csv`.
 - On the main page: `js/underwritten/uw-strip.js` and `css/uw-strip.css`.

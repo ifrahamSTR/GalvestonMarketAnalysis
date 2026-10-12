@@ -14,6 +14,8 @@
 //    distance order) and amenities (the whole island ranked best to worst, nothing excluded);
 //    the target popup's buttons; add from both modes = one row tagged Both; the Match column
 //    filter; "Append distance to notes"
+//  - the Sheet tab: every cell of the scenario's CSV drawn in place (all 12 scenarios),
+//    input cells edited in place recalculate the sheet and match the download
 //  - no console errors
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
@@ -60,6 +62,11 @@ const ev = (f, a) => page.evaluate(f, a);
 const clip = () => ev(() => navigator.clipboard.readText());
 const revOfLine = (l) => +l.split("\t")[1];
 const isDesc = (xs) => xs.every((x, i) => !i || x <= xs[i - 1]);
+// A card's tab (Sheet, Comp set, Target profile, Property & pin, Scenarios, Data checks).
+async function openTab(pid, tab) {
+  await ev(([pid, tab]) => { UW.ui.cardTab[pid] = tab; UW.ui.expanded.add(pid); UW.cardsApi.renderCard(pid); }, [pid, tab]);
+  await page.waitForTimeout(150);
+}
 async function chooseIfAsked(value) {
   const d = page.locator("#uw-choice[open]");
   if (await d.count()) await d.locator('[data-v="' + value + '"]').click();
@@ -187,6 +194,7 @@ const defBtn = await ev(() => document.activeElement && document.activeElement.d
 await chooseIfAsked("without");
 await page.waitForTimeout(200);
 check(dlgShown === 1 && defBtn === "without" && (await clip()).split("\n").length === 1, "Copy comps with errors asks first; the default (focused) choice copies without them");
+await openTab(P95, "comps");
 await page.click("#uw-card-" + P95 + ' [data-act="remove-flagged"]');
 await page.waitForTimeout(200);
 const lists = await ev(() => document.querySelector("#uw-choice[open]").textContent);
@@ -223,7 +231,7 @@ const pop = await ev(() => { const t = document.querySelector(".uw-tpop"); retur
 check(pop && pop.zl && pop.scen === 2 && pop.table && pop.err === "1 comp error", "the target popup: Zillow link, scenario switch, side-by-side table, error badge");
 await ev(() => UW.mapApi.map.closePopup());
 // file 97: empty state. (Reset this browser's 97 edits first: the copy test above added one comp.)
-await ev((pid) => { UW.revert(pid, "97"); UW.ui.versions[pid] = "97"; UW.cardsApi.renderCard(pid); }, OP);
+await ev((pid) => { UW.revert(pid, "97"); UW.ui.versions[pid] = "97"; UW.ui.cardTab[pid] = "comps"; UW.cardsApi.renderCard(pid); }, OP);
 await page.waitForTimeout(200);
 const emptyBtns = await ev((pid) => [...document.querySelectorAll("#uw-card-" + pid + " .uw-empty-comps button")].map((b) => b.textContent), OP);
 check(emptyBtns.join("|") === "Start from the With pool comp set|Find no-pool comps", "file 97 (no comps) offers: " + emptyBtns.join(" / "));
@@ -232,6 +240,7 @@ await page.waitForTimeout(600);
 const np = await ev(() => ({ mode: UW.ui.mode, pool: UW.ui.amRules.pool, island: UW.matchSet.size, rows: UW.mapApi.lastNearest.map((x) => x.l.flagSet.has("pool")) }));
 check(np.mode === "amenity" && np.pool === 0 && np.island === COMPS.listings.length && np.rows.length > 0 && !np.rows[0],
   "“Find no-pool comps” opens Match by amenities with pool = 0: the whole island (" + np.island + ") ranked, no-pool homes first (" + np.rows.filter((h) => !h).length + " of the best " + np.rows.length + " have no pool)");
+await openTab(OP, "comps");
 await page.click("#uw-card-" + OP + ' [data-act="start-from"]');
 await page.waitForTimeout(300);
 const n97 = await ev((pid) => UW.property(pid).versions.find((v) => v.label === "97").comps.length, OP);
@@ -255,6 +264,7 @@ await page.waitForTimeout(400);
 const more = await ev(() => UW.mapApi.lastNearest.length);
 check(more === 75, "“Show 50 more” continues down the ranking (" + more + " shown)");
 const before = await ev(() => UW.mapApi.lastNearest.slice(0, 10).map((x) => x.l.id).join(","));
+await openTab(GC, "profile");
 await page.click("#uw-profile-" + GC + ' [data-act="pflag"][data-f="pool"][data-v="0"]');
 await page.waitForTimeout(500);
 const flipped = await ev((pid) => { const pr = UW.activeVersion(UW.property(pid)).profile; return { pool: pr.flags.pool, src: pr.src.flags.pool, top: UW.mapApi.lastNearest.slice(0, 10).map((x) => x.l.id).join(","), nopool: UW.mapApi.lastNearest.slice(0, 5).every((x) => !x.l.flagSet.has("pool")) }; }, GC);
@@ -293,7 +303,7 @@ await ev(([pid, id]) => UW.actions.addComps(pid, UW.activeVersion(UW.property(pi
 await page.waitForTimeout(300);
 const tagged = await ev(([pid, id]) => { const cs = UW.activeVersion(UW.property(pid)).comps; const c = cs.filter((x) => UW.compId(x) === id); return { n: cs.length, dup: c.length, match: c[0] && c[0].match, notes: c[0] && c[0].notes }; }, [GC, viaPop.first]);
 check(tagged.n === rowsBefore + 1 && tagged.dup === 1 && tagged.match === "both" && /^\[Location \+ Amenity match\] \d+\.\d mi from 6513 Golf Crest Dr · /.test(tagged.notes), "added from both modes: one row, “" + tagged.notes + "”");
-await ev((pid) => { UW.ui.expanded.add(pid); UW.cardsApi.renderCard(pid); }, GC);
+await openTab(GC, "comps");
 await page.selectOption("#uw-card-" + GC + " select[data-cmatch]", "both");
 await page.waitForTimeout(300);
 const vis = await ev((pid) => [...document.querySelectorAll("#uw-card-" + pid + " .uw-comps tbody tr")].filter((tr) => !tr.hidden && tr.offsetParent).map((tr) => tr.dataset.match), GC);
@@ -310,7 +320,72 @@ check(appended.filter((x) => x[0] === "sheet").every((x) => / · \d+\.\d mi from
   "“Append distance to notes” adds “· X.X mi from 6513 Golf Crest Dr” to sheet rows only");
 await ev((pid) => UW.revert(pid, "101"), GC);
 
-console.log("6. Console");
+// ---------------------------------------------------------------------------
+console.log("6. The Sheet tab: the CSV, cell for cell");
+// Read a drawn sheet back into rows x 22 (inputs by their shown value, merged cells into their top-left cell).
+const drawnSheet = (pid) => ev((pid) => {
+  const t = document.querySelector("#uw-card-" + pid + " .sh-t");
+  if (!t) return null;
+  const rows = [...t.tBodies[0].rows], grid = rows.map(() => new Array(22).fill(null));
+  rows.forEach((tr, i) => {
+    let j = 0;
+    [...tr.cells].slice(1).forEach((td) => {
+      while (grid[i][j] !== null) j++;
+      const f = td.querySelector("input,textarea");
+      const txt = f ? (td.querySelector(".sh-acct") && f.value ? "$" + f.value : f.value) : td.textContent;
+      const w = td.colSpan || 1, h = td.rowSpan || 1;
+      for (let a = 0; a < h; a++) for (let c = 0; c < w; c++) if (grid[i + a]) grid[i + a][j + c] = a || c ? "" : txt;
+      j += w;
+    });
+  });
+  return grid;
+}, pid);
+const CSVP = require(join(ROOT, "js/underwritten/uw-csv.js"));
+const squash = (x) => String(x == null ? "" : x).replace(/\s+/g, "");
+await ev(() => { localStorage.clear(); sessionStorage.clear(); });
+await page.reload({ waitUntil: "networkidle" });
+await page.waitForTimeout(600);
+let sheetsOk = 0, sheetCells = 0;
+const sheetBad = [];
+for (const p of UWJ.properties) {
+  for (const v of p.versions) {
+    await ev(([pid, label]) => { UW.ui.versions[pid] = label; UW.ui.cardTab[pid] = "sheet"; UW.cardsApi.open(pid); }, [p.id, v.label]);
+    await page.waitForSelector("#uw-card-" + p.id + ' .uw-sheet[data-ready="1"][data-label="' + v.label + '"]', { timeout: 15000 });
+    const drawn = await drawnSheet(p.id);
+    const src = CSVP.parse(readFileSync(join(ROOT, "underwriting/source_csv", v.file), "utf8")).rows;
+    let bad = drawn.length === src.length ? 0 : 1;
+    src.forEach((r, i) => { for (let j = 0; j < 22; j++) { sheetCells++; if (squash(r[j]) !== squash(drawn[i] && drawn[i][j])) bad++; } });
+    if (bad) sheetBad.push(v.file + " (" + bad + ")"); else sheetsOk++;
+  }
+}
+check(sheetBad.length === 0, "every scenario's Sheet tab shows its CSV cell for cell: " + sheetsOk + " sheets, " + sheetCells + " cells (A–V, all rows)" + (sheetBad.length ? "; differs: " + sheetBad.join(", ") : ""));
+// Edit the purchase price in the sheet: down payment, loan and cash on cash recalculate; the download writes the same cells.
+const B105 = UWJ.properties.find((p) => p.versions.some((v) => v.label === "105")).id;
+const cellAt = (pid, ref) => ev(([pid, ref]) => {
+  const col = ref.charCodeAt(0) - 65, row = +ref.slice(1) - 1, tr = document.querySelector("#uw-card-" + pid + " .sh-t").tBodies[0].rows[row];
+  let j = 0;
+  for (const td of [...tr.cells].slice(1)) { if (j === col) { const f = td.querySelector("input,textarea"); return f ? f.value : td.textContent.replace(/\s+/g, ""); } j += td.colSpan || 1; }
+  return null;
+}, [pid, ref]);
+await ev((pid) => { UW.ui.cardTab[pid] = "sheet"; UW.cardsApi.open(pid); }, B105);
+await page.waitForSelector("#uw-card-" + B105 + ' .uw-sheet[data-ready="1"]');
+const priceCell = page.locator("#uw-card-" + B105 + ' [data-sh="price"]');
+await priceCell.click();
+const rawShown = await priceCell.inputValue();
+await priceCell.fill("600000");
+await page.keyboard.press("Escape");
+await page.locator("#uw-card-" + B105 + " .sh-legend").click();
+await page.waitForTimeout(300);
+const sheetAfter = { d9: await cellAt(B105, "D9"), d10: await cellAt(B105, "D10"), d11: await cellAt(B105, "D11"), d32: await cellAt(B105, "D32") };
+const calc105 = await ev((pid) => { const v = UW.activeVersion(UW.property(pid)); return { down: v.outputs.down, loan: v.outputs.loan, coc: v.outputs.cases.low.coc }; }, B105);
+check(rawShown === "685000" && sheetAfter.d9 === "600,000" && sheetAfter.d10 === "$60,000" && sheetAfter.d11 === "$540,000" && sheetAfter.d32 === (calc105.coc * 100).toFixed(2) + "%",
+  "editing D9 in the sheet (shows 685000 while editing) recalculates D10 $60,000, D11 $540,000 and D32 " + sheetAfter.d32 + " in place");
+const dl105 = await ev(async (pid) => { const pr = UW.property(pid), v = UW.activeVersion(pr); return UWCsv.exportSheet(await UW.sourceCsv(v.file), Object.assign({}, UW.clone(v.inputs), { notes: v.notes, url: v.url, comps: v.comps })); }, B105);
+check(CSVP.parse(dl105).rows[8][3] === " $ 600,000 " && CSVP.amortBlock(dl105) === CSVP.amortBlock(readFileSync(join(ROOT, "underwriting/source_csv/New Market UW'ing - 105.csv"), "utf8")),
+  "Download UW CSV writes the edited D9 the sheet's way (\" $ 600,000 \") and keeps the amortization block byte for byte");
+await ev((pid) => UW.revert(pid, "105"), B105);
+
+console.log("7. Console");
 check(errors.length === 0, "no console errors" + (errors.length ? ": " + errors.join(" | ") : ""));
 await browser.close();
 server.close();

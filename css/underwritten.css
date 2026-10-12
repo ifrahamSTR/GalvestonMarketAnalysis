@@ -607,3 +607,68 @@ button.uw-badge--err:hover { background: #8f1d17; }
   .uw-pflag__s { grid-column: 1 / -1; white-space: normal; }
 }
 .uw-more { margin: 8px 0 0; font-size: 0.78rem; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+/* ---- Expanded card: tabs + actions bar --------------------------------- */
+.uw-cardbar { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 16px; border-bottom: var(--hairline); margin: -4px 0 14px; }
+.uw-cardbar .uw-tabs { padding: 0; border-bottom: 0; background: none; flex-wrap: wrap; }
+.uw-cardbar .uw-tab { padding: 8px 12px 9px; }
+.uw-cardbar .uw-tab[aria-selected="true"] { background: var(--surface-tint); }
+.uw-tabn { display: inline-block; font-size: 0.7rem; font-weight: 700; padding: 0 6px; margin-left: 3px; border-radius: 999px; background: var(--surface-tint-strong); color: var(--color-primary); vertical-align: 1px; }
+.uw-tabn--err { background: color-mix(in srgb, var(--color-danger) 14%, white); color: var(--color-danger); }
+.uw-actions--bar { margin: 0 0 8px; gap: 6px; }
+.uw-pane > .uw-box + .uw-box, .uw-pane > .uw-box + section { margin-top: 14px; }
+.uw-compstats { margin-bottom: 12px; }
+
+/* ---- Sheet tab: the CSV drawn as the Google Sheet ------------------------ */
+.sh-legend { font-size: 0.8rem; color: var(--color-text-muted); margin: 0 0 8px; }
+.sh-legend p { margin: 0 0 4px; }
+.sh-legend strong { color: var(--text-primary); }
+.sh-legend__edited { color: var(--status-pending-text); }
+.sh-swatch { display: inline-block; width: 12px; height: 12px; margin: 0 4px -2px 2px; background: #fff7d6; border: 1px solid #e6d27a; }
+.sh-wrap { overflow: auto; max-height: min(78vh, 900px); border: 1px solid #c7c7c7; border-radius: 4px; background: #fff; -webkit-overflow-scrolling: touch; }
+.sh-wrap:focus-visible { outline: 2px solid #1a73e8; outline-offset: 2px; }
+.sh-t { border-collapse: separate; border-spacing: 0; font: 12px/1.35 Arial, "Helvetica Neue", Helvetica, sans-serif; color: #1f1f1f; font-variant-numeric: tabular-nums; }
+.sh-t th, .sh-t td { border-right: 1px solid #e2e3e3; border-bottom: 1px solid #e2e3e3; padding: 3px 6px; height: 21px; white-space: nowrap; vertical-align: bottom; text-align: left; font-weight: 400; }
+.sh-t thead th { position: sticky; top: 0; z-index: 2; background: #f8f9fa; color: #5f6368; text-align: center; font-size: 11px; border-bottom: 1px solid #c7c7c7; padding: 2px 6px; height: 20px; }
+.sh-t .sh-row { position: sticky; left: 0; z-index: 1; background: #f8f9fa; color: #5f6368; text-align: center; font-size: 11px; min-width: 34px; border-right: 1px solid #c7c7c7; padding: 0 4px; }
+.sh-t thead .sh-corner { left: 0; z-index: 3; min-width: 34px; border-right: 1px solid #c7c7c7; }
+/* Column widths, roughly the sheet's: wide label columns B and E wrap, the rest stay on one line. */
+.sh-col--A { min-width: 54px; } .sh-col--B { min-width: 200px; } .sh-col--C { min-width: 62px; } .sh-col--D { min-width: 96px; }
+.sh-col--E { min-width: 230px; } .sh-col--F { min-width: 96px; } .sh-col--G { min-width: 18px; } .sh-col--H { min-width: 190px; }
+.sh-col--I { min-width: 96px; } .sh-col--J { min-width: 62px; } .sh-col--K { min-width: 84px; } .sh-col--L { min-width: 76px; }
+.sh-col--M { min-width: 76px; } .sh-col--N { min-width: 78px; } .sh-col--O { min-width: 72px; } .sh-col--P { min-width: 92px; }
+.sh-col--Q { min-width: 96px; } .sh-col--R { min-width: 82px; } .sh-col--S { min-width: 104px; } .sh-col--T { min-width: 86px; }
+.sh-col--U { min-width: 104px; } .sh-col--V { min-width: 220px; }
+.sh-t tbody td:nth-child(3) { white-space: normal; max-width: 230px; }
+.sh-t tbody td:nth-child(6) { white-space: normal; max-width: 290px; }
+.sh-n { text-align: right !important; }
+.sh-acct { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.sh-t td.sh-h { font-weight: 700; }
+.sh-url a { color: #1155cc; text-decoration: underline; }
+.sh-block { vertical-align: top !important; white-space: normal !important; padding: 4px 6px; }
+.sh-block__in { width: 0; min-width: 100%; white-space: pre-wrap; font-size: 11px; line-height: 1.4; color: #3c4043; }
+.sh-bad { background: #fce8e6; }
+.sh-calc { background: #fff; }
+/* Input cells: yellow until focused, then the sheet's blue selection. */
+.sh-in { background: #fff7d6; padding: 0 !important; }
+.sh-in:hover { background: #fff1bf; }
+.sh-in:focus-within { background: #fff; box-shadow: inset 0 0 0 2px #1a73e8; }
+.sh-in .sh-acct { padding: 0 6px; }
+.sh-in.is-empty .sh-acct > span:first-child { visibility: hidden; }
+/* Beat the page's form-field look (.uw-page input / textarea): these are sheet cells. */
+.uw-page .sh-t .sh-input, .uw-page .sh-t .sh-input:focus { display: block; width: 100%; min-width: 48px; max-width: none; box-sizing: border-box; border: 0; border-radius: 0; box-shadow: none; margin: 0; padding: 3px 0; background: transparent; font: inherit; font-size: 12px; color: #1f1f1f; text-align: right; outline: none; }
+.uw-page .sh-t td.sh-in > .sh-input { padding: 3px 6px; }
+.uw-page .sh-t .sh-notes, .uw-page .sh-t .sh-notes:focus { display: block; width: 100%; min-width: 0; max-width: none; height: 100%; min-height: 230px; box-sizing: border-box; border: 0; border-radius: 0; box-shadow: none; margin: 0; padding: 4px 6px; background: transparent; font: 12px/1.4 Arial, "Helvetica Neue", Helvetica, sans-serif; color: #1f1f1f; resize: vertical; outline: none; white-space: pre-wrap; }
+.sh-ce { min-height: 15px; padding: 3px 6px; white-space: pre-wrap; outline: none; cursor: text; }
+.sh-t tbody td.sh-in--text { vertical-align: bottom; }
+.sh-spill__in { width: 0; overflow: visible; white-space: nowrap; }
+td.sh-in.sh-block { vertical-align: top !important; }
+@media (max-width: 760px) {
+  .uw-cardbar { flex-direction: column; align-items: stretch; }
+  .uw-cardbar .uw-tabs { overflow-x: auto; flex-wrap: nowrap; }
+  .uw-cardbar .uw-tab { white-space: nowrap; }
+  .sh-wrap { max-height: 70vh; }
+}
+/* A card never grows past its column: the tab bar and the sheet scroll inside it. */
+.uw-card, .uw-card__body, .uw-cardbar, .uw-pane { min-width: 0; }
+.uw-cardbar > * { max-width: 100%; min-width: 0; }

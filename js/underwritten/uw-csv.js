@@ -137,6 +137,30 @@
     return L;
   }
 
+  /**
+   * Which setup slot (row offset within the Optimzation List) each setup item goes in, so items
+   * stay in the sheet's own rows: an item's saved slot ("row") first, then the slot where the
+   * source holds the same label, then the first free slot from the top. Returns slot -> item
+   * index (-1 = empty).
+   */
+  function placeSetup(rows, L, items) {
+    const slots = L.setup.last - L.setup.first + 1;
+    if (items.length > slots) throw new Error("The sheet has room for " + slots + " setup items");
+    const at = new Array(slots).fill(-1), rest = [], left = [];
+    items.forEach((it, k) => {
+      const r = it && Number.isInteger(it.row) ? it.row : -1;
+      if (r >= 0 && r < slots && at[r] < 0) at[r] = k; else rest.push(k);
+    });
+    rest.forEach((k) => {
+      const lab = norm(items[k] && items[k].label);
+      let hit = -1;
+      if (lab) for (let r = 0; r < slots; r++) if (at[r] < 0 && norm((rows[L.setup.first + r] || [])[L.setup.col]) === lab) { hit = r; break; }
+      if (hit >= 0) at[hit] = k; else left.push(k);
+    });
+    left.forEach((k) => { at[at.indexOf(-1)] = k; });
+    return at;
+  }
+
   // Rows that hold input cells; every other row is copied from the source text.
   function inputRows(L) {
     const s = new Set([L.notes[0], L.url[0], L.price[0], L.dpPct[0], L.rate[0], L.closingPct[0], L.cleaningCost[0], L.cleaningTurns[0], L.revenue[0][0]]);
@@ -168,13 +192,13 @@
     if (model.closingPct != null) set(L.closingPct, pctCell(model.closingPct, 2));
 
     if (model.setup) {
-      const slots = L.setup.last - L.setup.first + 1;
-      if (model.setup.length > slots) throw new Error("The sheet has room for " + slots + " setup items");
-      for (let k = 0; k < slots; k++) {
-        const it = model.setup[k];
-        set([L.setup.first + k, L.setup.col], it ? it.label || "" : "");
-        set([L.setup.first + k, L.setup.col + 1], it ? acct(it.amount) : "");
-      }
+      // Items keep their own rows (see placeSetup); blank rows stay blank.
+      const at = placeSetup(rows, L, model.setup);
+      at.forEach((k, r) => {
+        const it = k >= 0 ? model.setup[k] : null;
+        set([L.setup.first + r, L.setup.col], it ? it.label || "" : "");
+        set([L.setup.first + r, L.setup.col + 1], it ? acct(it.amount) : "");
+      });
     }
     if (model.opex) {
       // OPEX lines keep their template rows; values are matched by label.
@@ -237,5 +261,5 @@
       .concat(SHEET_FLAGS.map((f) => (c.flags && c.flags[f] ? 1 : 0)), [clean(c.notes)]).join("\t")).join("\n");
   }
 
-  return { COMP_HEADER, SHEET_FLAGS, parse, serializeRow, locate, exportSheet, amortBlock, compsTSV, sortComps, acct, pctCell };
+  return { COMP_HEADER, SHEET_FLAGS, parse, serializeRow, locate, placeSetup, exportSheet, amortBlock, compsTSV, sortComps, acct, pctCell, dollars2 };
 });

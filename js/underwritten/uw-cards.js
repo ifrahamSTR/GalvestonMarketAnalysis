@@ -3,9 +3,10 @@
  * groups (underwritten, new listings). The collapsed header carries the
  * decision numbers (price, revenue cases, cash on cash, comp errors first,
  * then the 20% revenue-to-price screen and the 4% low-case target); the
- * expanded body holds the scenario comparison, every input, the returns /
- * taxes / 5-year blocks, the comp table (the sheet's 15 columns, in revenue
- * order, Airbnb comps only) and the actions.
+ * expanded body opens on the Sheet tab (the scenario's CSV drawn as the sheet,
+ * inputs edited in place: uw-sheet.js), with the comp set (the sheet's 15
+ * columns, in revenue order, Airbnb comps only), target profile, property
+ * details, scenarios and data checks on their own tabs, and the actions.
  *
  * Editing never re-renders the field being typed in: inputs update the state,
  * and only the derived numbers ([data-d] slots) are redrawn.
@@ -37,7 +38,9 @@
     lists.addEventListener("click", onClick);
     lists.addEventListener("input", onInput);
     lists.addEventListener("change", onChange);
-    lists.addEventListener("toggle", onToggle, true);
+    lists.addEventListener("keydown", onTabKey);
+    UW.ui.cardTab = UW.ui.cardTab || {};
+    UW.sheetApi.init();
     C.renderList();
   };
 
@@ -64,10 +67,12 @@
     document.getElementById("uw-cards-new").innerHTML = nl.length ? nl.map(cardHtml).join("") :
       '<div class="uw-empty-card"><p><strong>No new listings yet.</strong> Add a Zillow listing to place it on the map, pull its nearest comps and underwrite it from a template.</p><button type="button" class="uw-btn uw-btn--primary" data-act="add-listing">+ Add listing</button></div>';
     markSelected();
+    UW.sheetApi.fill(document.getElementById("uw-lists"));
   };
 
-  C.open = function (pid, scroll) {
+  C.open = function (pid, scroll, tab) {
     UW.ui.expanded.add(pid);
+    if (tab) UW.ui.cardTab[pid] = tab;
     C.renderCard(pid);
     const el = document.getElementById("uw-card-" + pid);
     if (el && scroll) el.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -90,6 +95,7 @@
     tmp.innerHTML = cardHtml(p);
     el.replaceWith(tmp.firstChild);
     markSelected();
+    UW.sheetApi.fill(document.getElementById("uw-card-" + pid));
   }
   // Redraw only the derived numbers; leave the fields being edited alone.
   C.refresh = function (pid) {
@@ -99,8 +105,9 @@
     if (!p) return;
     el.querySelector('[data-region="head"]').innerHTML = headHtml(p);
     if (!UW.ui.expanded.has(pid)) return;
-    const d = derived(p, UW.activeVersion(p));
+    const v = UW.activeVersion(p), d = derived(p, v);
     el.querySelectorAll("[data-d]").forEach((n) => { if (d[n.dataset.d] != null) n.innerHTML = d[n.dataset.d]; });
+    UW.sheetApi.refresh(el, p, v);
     markSelected();
   };
   function markSelected() {
@@ -154,44 +161,9 @@
   // ---------------------------------------------------------------------------
   // Body
   // ---------------------------------------------------------------------------
-  const num = (v, scale) => (v == null ? "" : String(Math.round(v * (scale || 1) * 10000) / 10000));
-  const moneyIn = (val, attrs, label) => '<span class="uw-money-in"><span>$</span><input type="number" inputmode="decimal" step="any" value="' + num(val) + '" ' + attrs + (label ? ' aria-label="' + E(label) + '"' : "") + "></span>";
-  const pctIn = (val, attrs, label) => '<span class="uw-pct-in"><input type="number" inputmode="decimal" step="any" value="' + num(val, 100) + '" ' + attrs + (label ? ' aria-label="' + E(label) + '"' : "") + "><span>%</span></span>";
-
+  // Slots redrawn on every edit (the Sheet tab redraws its own calculated cells).
   function derived(p, v) {
-    const o = v.outputs, inp = v.inputs, out = {};
-    const R = [["revenue", "Forecasted revenue", "$"], ["opex", "Operating expenses", "$"], ["pm", "Property management fee", "$"], ["noi", "Net operating income", "$"],
-      ["ds", "Debt service", "$"], ["fcf", "Free cash flow", "$"], ["coc", "Cash on cash", "%"], ["principal", "Principal pay down", "$"], ["appr", "Annual appreciation", "$"],
-      ["totalReturn", "Total return", "%"], ["totalReturnTax", "Total return + year-1 tax savings", "%"]];
-    const cell = (c, k, t) => { const x = o.cases[c][k]; return t === "%" ? F.pct(x) : F.money(x); };
-    const src = v.source === "sheet" ? '<span class="uw-src uw-src--sheet">The sheet’s own numbers</span>' :
-      p.kind === "underwritten" ? '<span class="uw-src uw-src--calc">Recalculated from your edits</span> <button type="button" class="uw-linkbtn" data-act="revert">Back to the sheet’s numbers</button>' :
-        '<span class="uw-src uw-src--calc">Calculated on this page</span>';
-    out.returns = '<div class="uw-ret-head"><h4>Returns</h4>' + src + "</div>" +
-      '<div class="table-scroll"><table class="data-table uw-ret"><thead><tr><th></th><th>Low</th><th>Mid</th><th>High</th></tr></thead><tbody>' +
-      R.map(([k, lab, t]) => '<tr class="uw-ret--' + k + '"><th scope="row">' + lab + (k === "opex" && inp.opexRangePct ? ' <span class="muted">(±' + F.pct(inp.opexRangePct, 0) + ")</span>" : "") +
-        (k === "pm" ? ' <span class="muted">(' + F.pct(inp.pmPct || 0, 0) + ")</span>" : "") + (k === "appr" ? ' <span class="muted">(' + F.pct(inp.apprPct, 1) + ")</span>" : "") + "</th>" +
-        ["low", "mid", "high"].map((c) => "<td" + (k === "coc" ? ' class="uw-coc uw-coc--' + UW.cocStatus(o.cases[c].coc) + '"' : "") + ">" + cell(c, k, t) + "</td>").join("") + "</tr>").join("") + "</tbody></table></div>";
-    const T = o.taxes, Y = o.fiveYear;
-    out.taxes = '<table class="uw-mini"><tbody>' +
-      [["Land share", F.pct(T.landPct, 0)], ["Improvement basis", F.money(T.basis)], ["Short-life assets (" + F.pct(inp.slaPct == null ? 0.35 : inp.slaPct, 0) + ")", F.money(T.slas)],
-        ["Bonus depreciation", F.pct(T.bonusPct, 0)], ["Tax rate", F.pct(T.taxRate, 0)], ["Year-1 depreciation", F.money(T.y1Loss)], ["Tax savings", "<strong>" + F.money(T.taxSavings) + "</strong>"]]
-        .map((r) => '<tr><th scope="row">' + r[0] + "</th><td>" + r[1] + "</td></tr>").join("") + "</tbody></table>";
-    out.five = '<table class="uw-mini"><tbody>' + [["Cash flow", F.money(Y.cashFlow)], ["Equity (principal repaid)", F.money(Y.equity)], ["Appreciation", F.money(Y.appreciation)], ["Total", "<strong>" + F.money(Y.total) + "</strong>"]]
-      .map((r) => '<tr><th scope="row">' + r[0] + "</th><td>" + r[1] + "</td></tr>").join("") + "</tbody></table>";
-    out.down = F.money(o.down);
-    out.loan = F.money(o.loan);
-    out.closing = F.money(o.closing);
-    out.setupTotal = F.money(o.setupTotal);
-    out.setupTotal2 = F.money(UWMath.setupTotal(inp));
-    out.oop = F.money(o.oop);
-    out.payment = F.money(o.payment) + "/mo";
-    out.opexMonthly = F.money(UWMath.opexMonthly(inp)) + "/mo";
-    out.opexAnnual = F.money(UWMath.opexMonthly(inp) * 12) + " a year (mid case)";
-    out.clean = F.money(UWMath.cleaningMonthly(inp));
-    out.stats = statsHtml(p, v);
-    out.details = detailsHtml(p, v);
-    out.setupCount = inp.setup.length + " of 15 rows";
+    const out = { stats: statsHtml(p, v), details: detailsHtml(p, v) };
     ["beds", "baths", "sleeps"].forEach((k) => { out["psrc-" + k] = srcLabel(v.profile.src[k]); });
     return out;
   }
@@ -251,82 +223,73 @@
         row("Area · zone", E(p.place.areaName) + " · " + E(p.place.zone)) + row("Beach position", E(p.place.loc)) : "") + "</dl>";
   }
 
-  function bodyHtml(p) {
-    const v = UW.activeVersion(p), inp = v.inputs, d = derived(p, v), pid = E(p.id);
+  // Tabs: the Sheet (the scenario's CSV, drawn as the sheet) first; the comp set, target
+  // profile, property details, scenarios and data checks one click away.
+  function tabsOf(p) {
+    const t = [["sheet", "Sheet"], ["comps", "Comp set"], ["profile", "Target profile"], ["property", "Property & pin"]];
+    if (p.versions.length > 1) t.push(["scen", "Scenarios"]);
+    t.push(["checks", "Data checks"]);
+    return t;
+  }
+  function activeTab(p) {
+    const tab = UW.ui.cardTab[p.id] || "sheet";
+    return tabsOf(p).some((t) => t[0] === tab) ? tab : "sheet";
+  }
+
+  function actionsHtml(p, v) {
     const isUW = p.kind === "underwritten";
-    const extras = (v.base && v.base.extras) || (UW.data.uw.properties[0].versions[0].extras || []);
-    const myears = v.sheet && v.sheet.mortgageYears;
-    const mismatch = myears != null && inp.amortYears != null && myears !== inp.amortYears;
+    return '<div class="uw-actions uw-actions--bar">' +
+      '<button type="button" class="uw-btn uw-btn--small" data-act="show"' + (p.geo ? "" : " disabled") + ">Show on map</button>" +
+      '<button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="copy-comps"' + (v.comps.length ? "" : " disabled") + ">Copy comps</button>" +
+      '<button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="copy-rev">Copy revenue cases</button>' +
+      '<button type="button" class="uw-btn uw-btn--small uw-btn--primary" data-act="csv">Download UW CSV</button>' +
+      (p.kind === "new" ? '<button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="edit-listing">Edit listing details</button><button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="promote"' +
+        (p.listing.downloaded ? "" : ' disabled title="Download the UW CSV first"') + ">Promote to underwritten</button>" : "") +
+      (p.kind === "promoted" ? '<button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="edit-listing">Edit listing details</button><button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="demote">Move back to new listings</button>' : "") +
+      (p.kind !== "underwritten" ? '<button type="button" class="uw-btn uw-btn--small uw-btn--danger" data-act="delete">Delete listing</button>' : "") +
+      (isUW && UW.editSource(p.id, v.label) ? '<button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="revert">Discard edits to file ' + E(v.label) + "</button>" : "") + "</div>";
+  }
 
-    const purchase = '<section class="uw-box"><h4>Purchase &amp; financing</h4><div class="uw-form">' +
-      '<label>Purchase price</label>' + moneyIn(inp.price, 'data-in="price" data-focus="' + pid + '-price"', "Purchase price") +
-      '<label>Down payment</label><div class="uw-pair">' + pctIn(inp.dpPct, 'data-in="dpPct" data-focus="' + pid + '-dp"', "Down payment percent") + '<output data-d="down">' + d.down + "</output></div>" +
-      '<label>Loan amount</label><output data-d="loan">' + d.loan + "</output>" +
-      '<label>Interest rate</label>' + pctIn(inp.rate, 'data-in="rate" data-focus="' + pid + '-rate"', "Interest rate") +
-      '<label>Closing costs</label><div class="uw-pair">' + pctIn(inp.closingPct, 'data-in="closingPct" data-focus="' + pid + '-cc"', "Closing costs percent") + '<output data-d="closing">' + d.closing + "</output></div>" +
-      '<label>Setup (renovation, amenities, furniture)</label><output data-d="setupTotal">' + d.setupTotal + "</output>" +
-      '<label class="uw-strong">Total out of pocket</label><output class="uw-strong" data-d="oop">' + d.oop + "</output>" +
-      '<label>Payment</label><output data-d="payment">' + d.payment + "</output>" +
-      "</div>" +
-      '<p class="uw-hint">Debt service uses a ' + (inp.amortYears || 30) + "-year amortization, as the sheet’s amortization block does." +
-      (mismatch ? ' <span class="uw-warn">The sheet’s “Mortgage Years” says ' + myears + ", but its debt service uses " + inp.amortYears + " years. Not changed here.</span>" : "") + "</p>" +
-      '<p class="uw-hint">Fixed by the sheet: OPEX range ±' + F.pct(inp.opexRangePct, 0) + ", management fee " + F.pct(inp.pmPct || 0, 0) + ", appreciation " + F.pct(inp.apprPct, 1) +
-      ", land " + F.pct(inp.landPct, 0) + ", short-life assets " + F.pct(inp.slaPct == null ? 0.35 : inp.slaPct, 0) + ", bonus " + F.pct(inp.bonusPct, 0) + ", tax rate " + F.pct(inp.taxRate, 0) + ".</p></section>";
+  function bodyHtml(p) {
+    const v = UW.activeVersion(p), d = derived(p, v), pid = E(p.id);
+    const isUW = p.kind === "underwritten";
+    const tab = activeTab(p);
+    const nErr = UW.compErrors(v).length, nChecks = checkCount(p, v);
+    const count = (k) => k === "comps" ? ' <span class="uw-tabn' + (nErr ? " uw-tabn--err" : "") + '">' + (nErr ? nErr + " error" + (nErr === 1 ? "" : "s") : v.comps.length) + "</span>" :
+      k === "checks" && nChecks ? ' <span class="uw-tabn">' + nChecks + "</span>" : "";
+    const bar = '<div class="uw-cardbar"><div class="uw-tabs" role="tablist" aria-label="' + E(p.street) + '">' +
+      tabsOf(p).map(([k, t]) => '<button type="button" role="tab" class="uw-tab" data-act="card-tab" data-tab="' + k + '" id="uw-tab-' + pid + "-" + k + '" aria-controls="uw-pane-' + pid + "-" + k +
+        '" aria-selected="' + (k === tab) + '" tabindex="' + (k === tab ? 0 : -1) + '">' + t + count(k) + "</button>").join("") + "</div>" + actionsHtml(p, v) + "</div>";
+    const pane = (k, html) => '<div class="uw-pane" role="tabpanel" data-pane="' + k + '" id="uw-pane-' + pid + "-" + k + '" aria-labelledby="uw-tab-' + pid + "-" + k + '"' + (k === tab ? "" : " hidden") + ">" + html + "</div>";
 
-    const setup = '<section class="uw-box" data-region="setup"><div class="uw-box__head"><h4>Setup items</h4><span class="muted" data-d="setupCount">' + d.setupCount + "</span></div>" +
-      '<ul class="uw-items">' + inp.setup.map((s, i) => '<li><input type="text" value="' + E(s.label) + '" data-setup-label="' + i + '" aria-label="Setup item ' + (i + 1) + '" data-focus="' + pid + "-sl" + i + '">' +
-        moneyIn(s.amount, 'data-setup-amt="' + i + '" data-focus="' + pid + "-sa" + i + '"', "Cost of setup item " + (i + 1)) +
-        '<button type="button" class="uw-btn uw-btn--icon" data-act="setup-del" data-i="' + i + '" aria-label="Remove ' + E(s.label || "item") + '">×</button></li>').join("") + "</ul>" +
-      '<div class="uw-items__foot"><button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="setup-add"' + (inp.setup.length >= 15 ? " disabled" : "") + ">+ Add item</button>" +
-      '<span class="uw-total">Total <strong data-d="setupTotal2">' + d.setupTotal2 + "</strong></span></div>" +
-      (extras.length ? '<p class="uw-extras"><span class="muted">The sheet’s common extras:</span> ' + extras.map((x, i) => '<button type="button" class="uw-chip uw-chip--sm" data-act="setup-extra" data-i="' + i + '"' + (inp.setup.length >= 15 ? " disabled" : "") + ">+ " + E(x.label) + " " + F.k(x.amount) + "</button>").join("") + "</p>" : "") + "</section>";
-
-    const opex = '<section class="uw-box"><h4>Operating expenses <span class="muted">monthly</span></h4><ul class="uw-items uw-items--opex">' +
-      inp.opex.map((o, i) => o.cleaning ?
-        '<li class="uw-clean"><span class="uw-items__l">Cleaning</span><span class="uw-clean__calc">' + moneyIn(inp.cleaningCost, 'data-clean="cost" data-focus="' + pid + '-cc1"', "Cost per clean") +
-        '<span class="muted">× turns</span><input type="number" step="any" inputmode="decimal" value="' + num(inp.cleaningTurns) + '" data-clean="turns" aria-label="Turns per month" data-focus="' + pid + '-cc2"><span class="muted">=</span><output data-d="clean">' + d.clean + "</output></span></li>" :
-        '<li><span class="uw-items__l">' + E(o.label) + (o.note ? ' <span class="muted">(' + E(o.note) + ")</span>" : "") + "</span>" + moneyIn(o.amount, 'data-opex="' + i + '" data-focus="' + pid + "-ox" + i + '"', o.label + " per month") + "</li>").join("") + "</ul>" +
-      '<div class="uw-items__foot"><span class="uw-total">Total <strong data-d="opexMonthly">' + d.opexMonthly + '</strong> · <span data-d="opexAnnual">' + d.opexAnnual + "</span></span></div>" +
-      (p.kind !== "underwritten" ? '<p class="uw-hint">Copied from ' + E(p.listing.templateLabel ? "file " + p.listing.templateLabel : "the template") + ". Check property taxes and insurance for this price.</p>" : "") + "</section>";
-
-    const revenue = '<section class="uw-box uw-box--rev"><h4>Revenue cases <span class="muted">you set these</span></h4><div class="uw-rev">' +
-      ["low", "mid", "high"].map((c) => '<label><span>' + c[0].toUpperCase() + c.slice(1) + "</span>" + moneyIn(inp.revenue[c], 'data-rev="' + c + '" data-focus="' + pid + "-rv" + c + '"', c + " revenue") + "</label>").join("") + "</div>" +
-      '<div data-d="stats">' + d.stats + "</div></section>";
-
-    const notes = '<section class="uw-box"><h4>Analyst notes</h4><textarea rows="9" data-notes="1" aria-label="Analyst notes" data-focus="' + pid + '-notes">' + E(v.notes) + "</textarea>" +
-      '<p class="uw-hint">Same format as the sheet’s Analyst Notes cell. Bed / bath, lot and size are read from it.</p></section>';
-    const profile = profileHtml(p, v);
     const details = '<section class="uw-box"><h4>Property details</h4><div data-d="details">' + d.details + "</div>" +
       '<div class="uw-form uw-form--tight"><label for="wf-' + pid + '">Waterfront type</label><select id="wf-' + pid + '" data-wf="1" data-focus="' + pid + '-wf">' +
       UW.WATERFRONT_TYPES.map((t) => '<option value="' + t + '"' + (p.waterfront === t ? " selected" : "") + ">" + (t === "Bay-canal" ? "Bay / canal" : t === "None" ? "Not on the water" : t) + "</option>").join("") + "</select></div>" +
       '<p class="uw-hint">Can’t be read reliably from an address, so it defaults to the beach position and you can change it. Match by location uses it.</p>' +
       '<div class="uw-actions uw-actions--tight">' + (p.geo ? '<button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="pin">Adjust pin</button>' :
         '<button type="button" class="uw-btn uw-btn--small" data-act="pin">Place pin on the map</button><button type="button" class="uw-btn uw-btn--small uw-btn--ghost" data-act="osm">Look up with OpenStreetMap</button>') +
-      (p.pinEdited && isUW ? '<button type="button" class="uw-linkbtn" data-act="pin-reset">Use the geocoded pin</button>' : "") + "</div></section>";
-
-    const comps = compsHtml(p, v);
-    const checks = checksHtml(p, v);
-    const amort = isUW ? '<details class="uw-amort" data-amort="' + E(v.file) + '"><summary>Amortization schedule, copied from the sheet (file ' + E(v.label) + ")</summary><div class=\"uw-amort__body\"><p class=\"uw-hint\">Loading…</p></div></details>" : "";
+      (p.pinEdited && isUW ? '<button type="button" class="uw-linkbtn" data-act="pin-reset">Use the geocoded pin</button>' : "") + "</div>" +
+      '<p class="uw-hint">Bed / bath, lot and size are read from the Analyst Notes cell (K2 on the Sheet tab).</p></section>';
     const scen = p.versions.length > 1 ? '<section class="uw-box uw-box--scen"><h4>Scenarios side by side <span class="muted">the same house, underwritten ' + p.versions.length + " ways</span></h4>" + UW.scenarioTable(p) + "</section>" : "";
-    const actions = '<div class="uw-actions">' +
-      '<button type="button" class="uw-btn" data-act="show"' + (p.geo ? "" : " disabled") + ">Show on map</button>" +
-      '<button type="button" class="uw-btn uw-btn--ghost" data-act="copy-comps"' + (v.comps.length ? "" : " disabled") + ">Copy comps</button>" +
-      '<button type="button" class="uw-btn uw-btn--ghost" data-act="copy-rev">Copy revenue cases</button>' +
-      '<button type="button" class="uw-btn uw-btn--primary" data-act="csv">Download UW CSV</button>' +
-      (p.kind === "new" ? '<button type="button" class="uw-btn uw-btn--ghost" data-act="edit-listing">Edit listing details</button><button type="button" class="uw-btn uw-btn--ghost" data-act="promote"' +
-        (p.listing.downloaded ? "" : ' disabled title="Download the UW CSV first"') + ">Promote to underwritten</button>" : "") +
-      (p.kind === "promoted" ? '<button type="button" class="uw-btn uw-btn--ghost" data-act="edit-listing">Edit listing details</button><button type="button" class="uw-btn uw-btn--ghost" data-act="demote">Move back to new listings</button>' : "") +
-      (p.kind !== "underwritten" ? '<button type="button" class="uw-btn uw-btn--danger" data-act="delete">Delete listing</button>' : "") +
-      (isUW && UW.editSource(p.id, v.label) ? '<button type="button" class="uw-btn uw-btn--ghost" data-act="revert">Discard edits to file ' + E(v.label) + "</button>" : "") + "</div>" +
-      (p.kind === "new" && !p.listing.downloaded ? '<p class="uw-hint">“Promote to underwritten” unlocks once this listing’s UW CSV has been downloaded.</p>' : "") +
-      '<p class="uw-hint">The CSV starts from ' + (isUW ? "this target’s own sheet (" + E(v.file) + ")" : E(UW.data.uw.templateFile)) + " and replaces only the input cells: notes, URL, price, down payment, rate, closing, setup items, OPEX items, revenue cases and comp rows (written in revenue order). " +
+    const foot = (p.kind === "new" && !p.listing.downloaded ? '<p class="uw-hint">“Promote to underwritten” unlocks once this listing’s UW CSV has been downloaded.</p>' : "") +
+      '<p class="uw-hint">Download UW CSV writes this sheet: it starts from ' + (isUW ? "this target’s own CSV (" + E(v.file) + ")" : E(UW.data.uw.templateFile)) +
+      " and replaces only the input cells (notes, URL, price, down payment, rate, closing, setup items, OPEX, revenue cases and comp rows, in revenue order). " +
       "Totals and returns keep the source’s values until the inputs are entered in the Google Sheet; the amortization block is copied unchanged.</p>";
 
-    return scen + '<div class="uw-grid uw-grid--top">' + revenue + '<section class="uw-box uw-box--ret" data-d="returns">' + d.returns + "</section></div>" +
-      '<div class="uw-grid uw-grid--2"><section class="uw-box"><h4>Taxes</h4><div data-d="taxes">' + d.taxes + '</div></section><section class="uw-box"><h4>5-year</h4><div data-d="five">' + d.five + "</div></section></div>" +
-      '<div class="uw-grid uw-grid--3">' + purchase + setup + opex + "</div>" +
-      '<div class="uw-grid uw-grid--2">' + notes + details + "</div>" + profile +
-      comps + checks + amort + actions;
+    return bar +
+      pane("sheet", UW.sheetApi.html(p, v) + foot) +
+      pane("comps", '<div class="uw-compstats" data-d="stats">' + d.stats + "</div>" + compsHtml(p, v)) +
+      pane("profile", profileHtml(p, v)) +
+      pane("property", details) +
+      (scen ? pane("scen", scen) : "") +
+      pane("checks", checksHtml(p, v));
+  }
+
+  function switchTab(card, pid, tab) {
+    UW.ui.cardTab[pid] = tab;
+    card.querySelectorAll(".uw-tab").forEach((b) => { const on = b.dataset.tab === tab; b.setAttribute("aria-selected", on); b.tabIndex = on ? 0 : -1; });
+    card.querySelectorAll(".uw-pane").forEach((pn) => { pn.hidden = pn.dataset.pane !== tab; });
+    if (tab === "sheet") UW.sheetApi.fill(card);
   }
 
   // ---------------------------------------------------------------------------
@@ -456,20 +419,6 @@
     if (t.dataset.cmatch) { UW.ui.cmatch[c.p.id] = t.value; C.renderCard(c.p.id); }
     // Comp notes were saved as typed and feed nothing else on the card: no re-render.
   }
-  function onToggle(e) {
-    const d = e.target;
-    if (!d.matches || !d.matches("details[data-amort]") || !d.open) return;
-    const body = d.querySelector(".uw-amort__body");
-    UW.amortization().then((A) => {
-      const blk = A[d.dataset.amort];
-      if (!blk) { body.innerHTML = '<p class="uw-empty">Not found.</p>'; return; }
-      const cols = [9, 10, 11, 12, 13, 14, 15, 16];
-      const rows = blk.rows.filter((r) => cols.some((j) => (r[j] || "").trim()));
-      body.innerHTML = '<p class="uw-hint">Rows ' + blk.startRow + "–" + blk.endRow + " of " + E(d.dataset.amort) + ", shown as written. This block is never recalculated or edited, and the CSV download copies it byte for byte.</p>" +
-        '<div class="uw-amort__scroll"><table class="uw-amort__t"><tbody>' + rows.map((r) => "<tr>" + cols.map((j) => "<td>" + E(r[j] || "") + "</td>").join("") + "</tr>").join("") + "</tbody></table></div>";
-    }).catch(() => { body.innerHTML = '<p class="uw-empty">Couldn’t load the schedule.</p>'; });
-  }
-
   async function onClick(e) {
     const b = e.target.closest("[data-act]");
     if (b && b.dataset.act === "add-listing") { UW.addApi.open(); return; }
@@ -486,14 +435,14 @@
     const comps = () => v.comps.map((x) => Object.assign({}, x));
     switch (act) {
       case "toggle": toggle(p.id); break;
-      case "goto-comps":
+      case "card-tab": switchTab(c.card, p.id, b.dataset.tab); break;
+      case "goto-comps": case "goto-checks": {
+        const tab = act === "goto-comps" ? "comps" : "checks";
+        UW.ui.cardTab[p.id] = tab;
         UW.ui.expanded.add(p.id); C.renderCard(p.id);
-        UW.afterPointer(() => { const n = document.getElementById("uw-comps-" + p.id); if (n) n.scrollIntoView({ behavior: "smooth", block: "start" }); });
+        UW.afterPointer(() => { const n = document.getElementById("uw-tab-" + p.id + "-" + tab); if (n) n.scrollIntoView({ behavior: "smooth", block: "start" }); });
         break;
-      case "goto-checks":
-        UW.ui.expanded.add(p.id); C.renderCard(p.id);
-        document.getElementById("uw-checks-" + p.id).scrollIntoView({ behavior: "smooth", block: "center" });
-        break;
+      }
       case "setup-add": case "setup-extra": case "setup-del": {
         const inputs = UW.clone(v.inputs);
         if (act === "setup-del") inputs.setup.splice(i, 1);
@@ -542,6 +491,19 @@
         if (confirm("Delete " + p.street + "? This removes it from this browser" + (p.local ? "" : " (it stays in data/underwritten_local.json until that file changes)") + ".")) { UW.deleteListing(p.id); C.renderList(); }
         break;
     }
+  }
+
+  // Left / right arrows move between a card's tabs.
+  function onTabKey(e) {
+    const t = e.target;
+    if (!t.classList || !t.classList.contains("uw-tab") || (e.key !== "ArrowRight" && e.key !== "ArrowLeft")) return;
+    const tabs = Array.from(t.parentElement.querySelectorAll(".uw-tab"));
+    const n = tabs[(tabs.indexOf(t) + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
+    const c = ctx(t);
+    if (!c) return;
+    e.preventDefault();
+    switchTab(c.card, c.p.id, n.dataset.tab);
+    n.focus();
   }
 
   function toggle(pid) {

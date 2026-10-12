@@ -155,7 +155,7 @@
       row("20% screen (mid ÷ price)", screen) + row("Low case vs 4%", four) +
       row("Comp errors", (v) => { const n = UW.compErrors(v).length; return n ? '<span class="uw-badge uw-badge--err">' + n + " comp error" + (n === 1 ? "" : "s") + "</span>" : '<span class="uw-badge uw-badge--good">none</span>'; }) + "</tbody></table></div>";
   };
-  A.openCard = function (pid) { UW.cardsApi.open(pid, true); };
+  A.openCard = function (pid, tab) { UW.cardsApi.open(pid, true, tab); };
   A.rank = function (pid, mode) {
     UW.select(pid, { from: "popup", mode: mode || "location" });
     UW.panelApi.showTab("comps");

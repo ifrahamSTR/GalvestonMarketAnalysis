@@ -20,7 +20,7 @@
 /* global UWMath, UWGeo, UWCsv, UWRules */
 (function () {
   const UW = (window.UW = {});
-  UW.VERSION = "20261011-uw4";
+  UW.VERSION = "20261012-uw5";
   const LS_KEY = "galvestonUW.v1";
 
   // ---------------------------------------------------------------------------
