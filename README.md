@@ -169,3 +169,5 @@ None of the shared template files below were changed for this page.
   - They compare the share reaching the top quarter for their size, with vs. without a feature.
   - Features with fewer than 10 listings on either side are dropped.
 - **Presentation rules:** plain English, no statistical notation on the page, and conclusions → evidence → what to look for.
+
+**Standard setup lines (2026-10-14):** every new underwriting sheet made on the page carries the five lines every "UW'ing" sheet has, in their usual rows: Furniture / Decor / Essentials (row 5), Misc, CoHost Essentials, Design/Project Management and Install/Staging/Warehousing (rows 16–19). A line that is missing or has no amount gets Galveston file 101's amount ($50,000 / $25,000 / $3,500 / $25,000 / $18,250); a line the starting sheet already prices keeps its own amount. Rule: `UWRules.withStandardSetup` in `js/underwritten/uw-rules.js`, applied when a listing is created and whenever a new-listing sheet is shown or downloaded.
