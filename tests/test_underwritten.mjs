@@ -446,5 +446,29 @@ console.log("\nSTANDARD SETUP LINES: every new sheet carries the five, at Galves
   console.log("  " + (placed ? "ok  " : "FAIL") + " " + UW.templateFile + ": rows 5, 16, 17, 18, 19 hold " + WANT.map(([, , r]) => cell(r).join(" ")).join(" · "));
 }
 
+// ---------------------------------------------------------------------------
+console.log("\nSTANDARD OPEX LINES: every new sheet carries all fifteen, priced (Galveston file 101, rounded)\n");
+{
+  const bad = (m) => fail("standard OPEX: " + m);
+  const fresh = R.withStandardOpex({ opex: [], cleaningCost: null, cleaningTurns: null });
+  if (!(fresh.opex.length === 15 && fresh.opex.every((o) => o.cleaning || typeof o.amount === "number") && fresh.cleaningCost === 275 && fresh.cleaningTurns === 6)) bad("an empty OPEX list isn't filled");
+  if (M.opexMonthly(fresh) !== 4850) bad("the defaults total $" + M.opexMonthly(fresh) + " a month, not $4,850");
+  const kept = R.withStandardOpex({ opex: [{ label: "Property Taxes (Monthly)", amount: 385 }, { label: "PMI", amount: null }], cleaningCost: 150, cleaningTurns: 8 });
+  if (!(kept.opex.find((o) => o.label === "Property Taxes (Monthly)").amount === 385 && kept.opex.find((o) => o.label === "PMI").amount === 0 && kept.cleaningCost === 150 && kept.cleaningTurns === 8))
+    bad("a priced line or the cleaning cost changed, or a blank line wasn't filled");
+  // Exported from this site's new-listing template (blank lines and all), every OPEX row has a value; zeros show as "$ -".
+  const tdir = (UW.templates || []).some((t) => t.file === UW.templateFile) ? "underwriting/template" : "underwriting/source_csv";
+  const TT = readFileSync(join(ROOT, tdir, UW.templateFile), "utf8"), L0 = C.locate(C.parse(TT).rows);
+  const base = (UW.templates || []).find((t) => t.file === UW.templateFile) || UW.properties.flatMap((p) => p.versions).find((v) => v.file === UW.templateFile);
+  const inputs = R.withStandardOpex(Object.assign(JSON.parse(JSON.stringify(base.inputs)), { setup: R.withStandardSetup(base.inputs.setup) }));
+  const out = C.parse(C.exportSheet(TT, Object.assign(inputs, { notes: "n", url: "https://www.zillow.com/homedetails/1-Test-Rd/1_zpid/", price: 400000, comps: [] })));
+  const empty = [];
+  for (let i = L0.opex.first; i <= L0.opex.last; i++) if (out.rows[i][L0.opex.col].trim() && !out.rows[i][L0.opex.col + 1].trim()) empty.push(out.rows[i][L0.opex.col].trim());
+  if (empty.length) bad("exported OPEX lines left empty: " + empty.join(", "));
+  const shown = [];
+  for (let i = L0.opex.first; i <= L0.opex.last; i++) shown.push(out.rows[i][L0.opex.col].trim() + " " + out.rows[i][L0.opex.col + 1].trim());
+  console.log("  " + (empty.length ? "FAIL" : "ok  ") + " " + UW.templateFile + ": " + shown.join(" · "));
+}
+
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nALL TESTS PASSED");
 process.exit(failures ? 1 : 0);

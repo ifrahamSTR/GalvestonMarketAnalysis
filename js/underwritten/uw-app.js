@@ -20,7 +20,7 @@
 /* global UWMath, UWGeo, UWCsv, UWRules */
 (function () {
   const UW = (window.UW = {});
-  UW.VERSION = "20261014-uw6";
+  UW.VERSION = "20261015-uw7";
   const LS_KEY = "galvestonUW.v1";
 
   // ---------------------------------------------------------------------------
@@ -266,7 +266,7 @@
   }
   function buildNew(l) {
     const notes = l.notes || "";
-    const inputs = Object.assign({}, l.inputs, { setup: UWRules.withStandardSetup(l.inputs.setup) });
+    const inputs = UWRules.withStandardOpex(Object.assign({}, l.inputs, { setup: UWRules.withStandardSetup(l.inputs.setup) }));
     const place = placeFor(l.pin, notes, l.waterfront);
     if (place) place.areaName = (UW.areaById[place.area] || {}).name;
     const details = UW.parseNotes(notes);
